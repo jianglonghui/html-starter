@@ -1,96 +1,496 @@
 <!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <script defer src="/_vercel/insights/script.js"></script>
-    <link
-      rel="stylesheet"
-      href="https://cdn.jsdelivr.net/npm/@exampledev/new.css@1.1.2/new.min.css"
-    />
-    <title>Vercel HTML Starter</title>
-    <meta
-      name="description"
-      content="High-performance HTML based website template."
-    />
-  </head>
-  <body>
-    <h1>Vercel HTML Starter</h1>
-    <p>
-      This template is a simple, but powerful single
-      <code>index.html</code> file deployed to
-      <a href="https://vercel.com">Vercel</a>. When your site is deployed, all
-      static assets (like HTML, JavaScript, CSS, images, and more) are deployed
-      globally to every
-      <a href="https://vercel.com/docs/concepts/edge-network/overview"
-        >Vercel Edge Network</a
-      >
-      region.
-    </p>
-    <h2>Simple, privacy-friendly analytics</h2>
-    <p>
-      Want to understand your visitor traffic? Vercel Analytics gives you
-      first-party, privacy-friendly traffic analytics for your HTML site. This
-      template is already configured using the following script:
-    </p>
-    <pre><code>&lt;script defer src="/_vercel/insights/script.js"&gt;&lt;/script&gt;</code></pre>
-    <p>
-      Learn more about
-      <a href="https://vercel.com/analytics">Vercel Analytics</a>.
-    </p>
-    <h2>Integrated with git</h2>
-    <p>
-      Deploying updates to your site is as simple as
-      <code>git push</code> thanks to Vercel's advanced
-      <a href="https://vercel.com/docs/concepts/git">Git Integration</a>.
-      Support for GitHub, GitLab, Bitbucket is zero-configuration, and with the
-      flexible Vercel CLI and API, you can integrate with any tool possible.
-    </p>
-    <p>
-      Learn more about
-      <a href="https://vercel.com/docs/concepts/git">Git Integration</a>.
-    </p>
-    <h2>Fast <code>gzip</code> compression</h2>
-    <p>
-      To help ensure the smallest possible file sizes for your static assets,
-      the Vercel Edge Network compresses files by default using
-      <code>gzip</code>. You can also optionally use
-      <code>brotli</code> compressesion if you prefer.
-    </p>
-    <p>
-      Learn more about
-      <a href="https://vercel.com/docs/concepts/edge-network/compression"
-        >compression</a
-      >.
-    </p>
-    <h2>Advanced routing configuration</h2>
-    <p>
-      Vercel gives you a variety of ways to configure the routing of your
-      website. For example, adding redirects, rewrites, or headers to your page.
-      While you can use <code>vercel.json</code> to define these through JSON,
-      you can also express your routing configuration as code using
-      <a href="https://vercel.com/docs/concepts/functions/edge-middleware"
-        >Vercel Edge Middleware</a
-      >.
-    </p>
-    <p>
-      Middleware runs before the
-      <a href="https://vercel.com/docs/concepts/edge-network/caching"
-        >Vercel Edge Network Cache</a
-      >, so you can configure routing exactly as your application needs. For
-      example, this template uses <code>middleware.js</code> defined in the root
-      of the repository to add additional security headers to the site:
-    </p>
-    <pre><code>referrer-policy: origin-when-cross-origin
-strict-transport-security: max-age=31536000; includeSubDomains; preload
-x-content-type-options: nosniff
-x-dns-prefetch-control: on
-x-frame-options: DENY</code></pre>
-    <p>
-      Learn more about
-      <a href="https://vercel.com/docs/concepts/functions/edge-middleware"
-        >Vercel Edge Middleware</a
-      >.
-    </p>
-  </body>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>硬核山路驾驶 - 无限生成版</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #87CEEB; }
+        
+        #cockpit-overlay {
+            position: absolute; bottom: 0; left: 0; width: 100%; height: 100%;
+            z-index: 10; pointer-events: none;
+            background-image: url('image2.png'); 
+            background-size: cover; background-position: center bottom;
+        }
+
+        #mirror-left {
+            position: absolute; left: 3%; bottom: 52%; width: 14vw; height: 7vw;
+            z-index: 5; border-radius: 50% 50% 40% 40%; border: 3px solid #333;
+            background: #000; overflow: hidden; transform: rotate(2deg) scale(-1, 1);
+        }
+
+        #info {
+            position: absolute; top: 10px; left: 10px; color: #fff;
+            font-family: monospace; font-size: 16px; z-index: 20;
+            background: rgba(0,0,0,0.5); padding: 10px; border-radius: 4px;
+            pointer-events: none;
+            text-shadow: 1px 1px 2px black;
+        }
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js"
+            }
+        }
+    </script>
+</head>
+<body>
+
+<div id="info">
+    ⛰️ 秋名山特训 (无限生成版)<br>
+    W 加速 | S 刹车/倒车 | A/D 转向 | Space 手刹<br>
+    注意：路会不断生成，掉下去按 R 重置
+</div>
+<div id="cockpit-overlay"></div>
+<div id="mirror-left"></div>
+
+<script type="module">
+    import * as THREE from 'three';
+    import * as CANNON from 'cannon-es';
+
+    let world, scene, camera, renderer;
+    let mirrorCamera, mirrorRenderer;
+    let vehicle, chassisBody;
+    let visualChassis, visualWheels = [];
+    let isFirstPerson = true; // 默认开启第一人称
+
+    let lastSafePosition = new CANNON.Vec3(0, 2, 0);
+    let lastSafeQuaternion = new CANNON.Quaternion();
+    
+    // --- 无限路段管理变量 ---
+    const roadSegments = []; // 存储路段对象，用于后续删除
+    let segmentCounter = 0;  // 当前生成的段数
+    let prevX = 0, prevZ = 0; // 上一段路末端坐标
+    const segLen = 15;        // 每段长度
+    const roadWidth = 14;     // 路宽
+    let roadMat, wallMat, roadTex; 
+    // -----------------------
+
+    init();
+    animate();
+
+    function init() {
+        world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
+        roadMat = new CANNON.Material();
+        wallMat = new CANNON.Material();
+        const wheelMat = new CANNON.Material();
+
+        const roadContact = new CANNON.ContactMaterial(roadMat, wheelMat, { friction: 1.5, restitution: 0.0 });
+        const wallContact = new CANNON.ContactMaterial(wallMat, wheelMat, { friction: 0.1, restitution: 0.5 });
+        
+        world.addContactMaterial(roadContact);
+        world.addContactMaterial(wallContact);
+
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = new THREE.Fog(0x87CEEB, 20, 400); // 增加雾气深度，让远端生成更自然
+
+        camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        mirrorCamera = new THREE.PerspectiveCamera(60, 1.8, 0.1, 500);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        const mDiv = document.getElementById('mirror-left');
+        mirrorRenderer = new THREE.WebGLRenderer({ alpha: false });
+        mirrorRenderer.setSize(mDiv.clientWidth, mDiv.clientHeight);
+        mDiv.appendChild(mirrorRenderer.domElement);
+
+        const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+        sun.position.set(50, 100, 50);
+        sun.castShadow = true;
+        scene.add(sun);
+        scene.add(new THREE.AmbientLight(0x555555));
+
+        // 准备路面纹理
+        const canvas = document.createElement('canvas'); canvas.width=128; canvas.height=128;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle='#444'; ctx.fillRect(0,0,128,128);
+        ctx.fillStyle='#fff'; ctx.fillRect(60,0,8,40); ctx.fillRect(60,64,8,40);
+        roadTex = new THREE.CanvasTexture(canvas);
+        roadTex.wrapS = THREE.RepeatWrapping; roadTex.wrapT = THREE.RepeatWrapping;
+
+        // 初始化生成前30段路
+        for(let i=0; i<30; i++) {
+            generateNextSegment();
+        }
+
+        // 车辆配置
+        const chassisShape = new CANNON.Box(new CANNON.Vec3(1, 0.2, 2.2));
+        chassisBody = new CANNON.Body({ mass: 1500 });
+        chassisBody.addShape(chassisShape);
+        chassisBody.position.set(0, 2, -5);
+        chassisBody.angularDamping = 0.5;
+
+        // 视觉车身组
+        visualChassis = new THREE.Group();
+        
+        // 1. 底盘/主体 (红色)
+        const bodyMesh = new THREE.Mesh(
+            new THREE.BoxGeometry(2, 0.6, 4.4),
+            new THREE.MeshStandardMaterial({ color: 0xcc0000, metalness: 0.8, roughness: 0.2 })
+        );
+        bodyMesh.position.y = 0.3;
+        bodyMesh.castShadow = true;
+        visualChassis.add(bodyMesh);
+
+        // 2. 驾驶舱 (黑色玻璃感)
+        const cabin = new THREE.Mesh(
+            new THREE.BoxGeometry(1.5, 0.6, 1.8),
+            new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 1, roughness: 0.1 })
+        );
+        cabin.position.set(0, 0.8, 0.4); // 位于车身后半部分
+        visualChassis.add(cabin);
+
+        // 3. 车头大灯
+        const lightGeo = new THREE.BoxGeometry(0.4, 0.2, 0.1);
+        const lightMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff });
+        const leftLight = new THREE.Mesh(lightGeo, lightMat);
+        leftLight.position.set(-0.7, 0.3, -2.2);
+        const rightLight = leftLight.clone();
+        rightLight.position.set(0.7, 0.3, -2.2);
+        visualChassis.add(leftLight, rightLight);
+
+        // 4. 车尾灯 (红色)
+        const tailLightMat = new THREE.MeshStandardMaterial({ color: 0xff0000, emissive: 0x880000 });
+        const leftTail = new THREE.Mesh(lightGeo, tailLightMat);
+        leftTail.position.set(-0.7, 0.4, 2.2);
+        const rightTail = leftTail.clone();
+        rightTail.position.set(0.7, 0.4, 2.2);
+        visualChassis.add(leftTail, rightTail);
+
+        scene.add(visualChassis);
+
+        vehicle = new CANNON.RaycastVehicle({
+            chassisBody: chassisBody,
+            indexRightAxis: 0, indexUpAxis: 1, indexForwardAxis: 2,
+        });
+
+        const wheelOptions = {
+            radius: 0.45,
+            directionLocal: new CANNON.Vec3(0, -1, 0),
+            suspensionStiffness: 40,
+            suspensionRestLength: 0.4,
+            frictionSlip: 2.5,
+            dampingRelaxation: 2.3, dampingCompression: 4.4,
+            maxSuspensionForce: 100000,
+            rollInfluence: 0.1,
+            axleLocal: new CANNON.Vec3(1, 0, 0),
+            chassisConnectionPointLocal: new CANNON.Vec3(0, 0, 0),
+            maxSuspensionTravel: 0.2,
+            customSlidingRotationalSpeed: -30,
+            useCustomSlidingRotationalSpeed: true,
+        };
+
+        wheelOptions.chassisConnectionPointLocal.set(-1.1, 0, -1.4); vehicle.addWheel(wheelOptions);
+        wheelOptions.chassisConnectionPointLocal.set(1.1, 0, -1.4); vehicle.addWheel(wheelOptions);
+        wheelOptions.chassisConnectionPointLocal.set(-1.1, 0, 1.4); vehicle.addWheel(wheelOptions);
+        wheelOptions.chassisConnectionPointLocal.set(1.1, 0, 1.4); vehicle.addWheel(wheelOptions);
+
+        vehicle.addToWorld(world);
+
+        const wheelGeo = new THREE.CylinderGeometry(0.45, 0.45, 0.4, 24);
+        wheelGeo.rotateZ(Math.PI/2);
+        // 视觉轮子造型：外胎 + 轮毂
+        vehicle.wheelInfos.forEach(() => {
+            const wheelGroup = new THREE.Group();
+            
+            // 外胎 (黑色圆柱)
+            const tire = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.45, 0.45, 0.4, 24),
+                new THREE.MeshStandardMaterial({ color: 0x222222 })
+            );
+            tire.rotateZ(Math.PI/2);
+            
+            // 轮毂 (银色薄片)
+            const rim = new THREE.Mesh(
+                new THREE.SphereGeometry(0.3, 16, 16, 0, Math.PI*2, 0, Math.PI/2),
+                new THREE.MeshStandardMaterial({ color: 0xbbbbbb, metalness: 0.9 })
+            );
+            rim.rotateZ(Math.PI/2);
+            rim.position.x = 0.21; // 贴在轮胎外侧
+
+            wheelGroup.add(tire, rim);
+            scene.add(wheelGroup);
+            visualWheels.push(wheelGroup);
+        });
+
+        document.addEventListener('keydown', handler);
+        document.addEventListener('keyup', handler);
+
+        document.getElementById('cockpit-overlay').style.display = isFirstPerson ? 'block' : 'none';
+    }
+
+    // ================== 核心修改：单段生成逻辑 ==================
+    function generateNextSegment() {
+        const i = segmentCounter;
+        // 使用与原逻辑相同的S型弯道算法
+        const curve = Math.sin(i * 0.1) * 30 + Math.sin(i * 0.03) * 60;
+        const x = curve;
+        const z = -i * segLen;
+        const y = 0;
+
+        const segmentData = {
+            bodies: [],
+            meshes: []
+        };
+
+        if (i > 0) {
+            const dx = x - prevX;
+            const dz = z - prevZ;
+            const len = Math.sqrt(dx*dx + dz*dz);
+            const angle = Math.atan2(dx, dz);
+
+            // 物理路面
+            const roadBody = new CANNON.Body({ mass: 0, material: roadMat });
+            roadBody.addShape(new CANNON.Box(new CANNON.Vec3(roadWidth/2, 1, len/2 + 0.5))); 
+            roadBody.position.set((x+prevX)/2, -1, (z+prevZ)/2);
+            const q = new CANNON.Quaternion();
+            q.setFromAxisAngle(new CANNON.Vec3(0,1,0), angle);
+            roadBody.quaternion = q;
+            world.addBody(roadBody);
+            segmentData.bodies.push(roadBody);
+
+            // 视觉路面
+            const roadMesh = new THREE.Mesh(
+                new THREE.BoxGeometry(roadWidth, 0.2, len + 1),
+                new THREE.MeshLambertMaterial({ map: roadTex })
+            );
+            roadMesh.position.copy(roadBody.position);
+            roadMesh.position.y = 0;
+            roadMesh.quaternion.copy(roadBody.quaternion);
+            roadMesh.receiveShadow = true;
+            scene.add(roadMesh);
+            segmentData.meshes.push(roadMesh);
+
+            // 左侧山壁
+            const wallBody = new CANNON.Body({ mass: 0, material: wallMat });
+            wallBody.addShape(new CANNON.Box(new CANNON.Vec3(1, 5, len/2)));
+            const wallOffset = new CANNON.Vec3(-roadWidth/2 - 1, 4, 0); 
+            roadBody.pointToWorldFrame(wallOffset, wallBody.position);
+            wallBody.quaternion.copy(roadBody.quaternion);
+            world.addBody(wallBody);
+            segmentData.bodies.push(wallBody);
+
+            const wallMesh = new THREE.Mesh(
+                new THREE.BoxGeometry(2, 10, len+2),
+                new THREE.MeshLambertMaterial({ color: 0x5c4033 })
+            );
+            wallMesh.position.copy(wallBody.position);
+            wallMesh.quaternion.copy(wallBody.quaternion);
+            scene.add(wallMesh);
+            segmentData.meshes.push(wallMesh);
+
+            // 右侧装饰树
+            if (i % 3 === 0) {
+                const tree = createSimpleTree();
+                const treeOffset = new CANNON.Vec3(roadWidth/2 + 2 + Math.random()*5, 0, 0);
+                const treePos = new CANNON.Vec3();
+                roadBody.pointToWorldFrame(treeOffset, treePos);
+                tree.position.copy(treePos);
+                scene.add(tree);
+                segmentData.meshes.push(tree);
+            }
+
+            // 1. 右侧悬崖护栏 (安全感+1)
+            const railGeo = new THREE.BoxGeometry(0.2, 0.8, len);
+            const railMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa });
+            const rail = new THREE.Mesh(railGeo, railMat);
+            // 计算护栏位置：路面右边缘
+            const railOffset = new CANNON.Vec3(roadWidth / 2 - 0.5, 0.4, 0);
+            const railPos = new CANNON.Vec3();
+            roadBody.pointToWorldFrame(railOffset, railPos);
+            rail.position.copy(railPos);
+            rail.quaternion.copy(roadBody.quaternion);
+            scene.add(rail);
+            segmentData.meshes.push(rail);
+
+            // 2. 远山装饰 (让背景不空洞)
+            if (i % 5 === 0) {
+                const mountainGeo = new THREE.ConeGeometry(30 + Math.random() * 20, 100, 4);
+                const mountainMat = new THREE.MeshLambertMaterial({ color: 0x3d4c33 });
+                const distMountain = new THREE.Mesh(mountainGeo, mountainMat);
+                // 随机放在左侧山后或右侧深渊远方
+                const side = Math.random() > 0.5 ? 1 : -1;
+                distMountain.position.set(x + side * (100 + Math.random() * 50), -20, z - 100);
+                distMountain.rotation.y = Math.random() * Math.PI;
+                scene.add(distMountain);
+                segmentData.meshes.push(distMountain);
+            }
+
+            // 3. 路边乱石 (增加细节)
+            if (Math.random() > 0.7) {
+                const rockGeo = new THREE.DodecahedronGeometry(1 + Math.random() * 2, 0);
+                const rockMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
+                const rock = new THREE.Mesh(rockGeo, rockMat);
+                const rockOffset = new CANNON.Vec3(-roadWidth / 2 - 2, 0, Math.random() * 5);
+                const rockPos = new CANNON.Vec3();
+                roadBody.pointToWorldFrame(rockOffset, rockPos);
+                rock.position.copy(rockPos);
+                rock.rotation.set(Math.random(), Math.random(), Math.random());
+                scene.add(rock);
+                segmentData.meshes.push(rock);
+            }
+        }
+
+        roadSegments.push(segmentData);
+        
+        // 保持内存整洁：删除 100 段以前的路面
+        if (roadSegments.length > 100) {
+            const oldSeg = roadSegments.shift();
+            oldSeg.bodies.forEach(b => world.removeBody(b));
+            oldSeg.meshes.forEach(m => {
+                scene.remove(m);
+                if(m.geometry) m.geometry.dispose();
+                if(m.material) m.material.dispose();
+            });
+        }
+
+        prevX = x; prevZ = z;
+        segmentCounter++;
+    }
+
+    function createSimpleTree() {
+        const g = new THREE.Group();
+        const t = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 2), new THREE.MeshLambertMaterial({color:0x553311}));
+        t.position.y=1;
+        const l = new THREE.Mesh(new THREE.ConeGeometry(2, 5, 8), new THREE.MeshLambertMaterial({color:0x225511}));
+        l.position.y=4.5;
+        g.add(t); g.add(l);
+        return g;
+    }
+
+    function handler(e) {
+        const up = (e.type == 'keydown');
+        const maxForce = 2500;
+        const maxSteer = 0.45;
+
+        switch(e.key.toLowerCase()) {
+            case 'w':
+                const f = up ? maxForce : 0;
+                vehicle.applyEngineForce(0, 0); vehicle.applyEngineForce(0, 1);
+                vehicle.applyEngineForce(f, 2); vehicle.applyEngineForce(f, 3);
+                break;
+            case 's':
+                const b = up ? -maxForce : 0;
+                vehicle.applyEngineForce(0, 0); vehicle.applyEngineForce(0, 1);
+                vehicle.applyEngineForce(b, 2); vehicle.applyEngineForce(b, 3);
+                break;
+            case 'a':
+                vehicle.setSteeringValue(up ? maxSteer : 0, 0);
+                vehicle.setSteeringValue(up ? maxSteer : 0, 1);
+                break;
+            case 'd':
+                vehicle.setSteeringValue(up ? -maxSteer : 0, 0);
+                vehicle.setSteeringValue(up ? -maxSteer : 0, 1);
+                break;
+            case ' ':
+                const br = up ? 100 : 0;
+                vehicle.setBrake(br, 2); vehicle.setBrake(br, 3);
+                break;
+            case 'r':
+                if(up) resetCar();
+                break;
+            case 'v':
+                if (up) { // 只在键位弹起时触发一次
+                    isFirstPerson = !isFirstPerson;
+                    // 切换内饰图片显示
+                    document.getElementById('cockpit-overlay').style.display = isFirstPerson ? 'block' : 'none';
+                }
+                break;
+        }
+    }
+
+    function resetCar() {
+        chassisBody.position.copy(lastSafePosition);
+        chassisBody.position.x += 2;
+        chassisBody.position.y += 2;
+        chassisBody.quaternion.copy(lastSafeQuaternion);
+        chassisBody.velocity.set(0,0,0);
+        chassisBody.angularVelocity.set(0,0,0);
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        world.step(1 / 60);
+
+        // --- 核心修改：无限生成触发器 ---
+        // 如果车辆靠近最后一段路面（剩余不到15段时），生成新的
+        if (chassisBody.position.z < prevZ + (segLen * 15)) {
+            generateNextSegment();
+        }
+        // ------------------------------
+
+        visualChassis.position.copy(chassisBody.position);
+        visualChassis.quaternion.copy(chassisBody.quaternion);
+        
+        for (let i = 0; i < vehicle.wheelInfos.length; i++) {
+            vehicle.updateWheelTransform(i);
+            const t = vehicle.wheelInfos[i].worldTransform;
+            visualWheels[i].position.copy(t.position);
+            visualWheels[i].quaternion.copy(t.quaternion);
+        }
+
+
+        // 定义两种视角的参数
+        const tpSeatOffset = new THREE.Vector3(0, 5, 10);      // 第三人称：高处往后
+        const fpSeatOffset = new THREE.Vector3(-0.4, 1.2, -1);  // 第一人称：驾驶员头部位置
+
+        const tpLookOffset = new THREE.Vector3(0, 0, -5);      // 第三人称：看车头前方
+        const fpLookOffset = new THREE.Vector3(-0.4, -1.5, -10); // 第一人称：平视远方
+
+        // 根据当前视角选择参数
+        const currentSeat = isFirstPerson ? fpSeatOffset : tpSeatOffset;
+        const currentLook = isFirstPerson ? fpLookOffset : tpLookOffset;
+
+        // 计算相机在世界空间的位置
+        // .clone() 很重要，防止修改原始向量
+        const camPos = currentSeat.clone().applyMatrix4(visualChassis.matrixWorld);
+
+        // 平滑跟随
+        // 第一人称需要 lerp 极高（0.9）甚至直接 copy，否则会有延迟感导致晕车
+        // 第三人称可以 lerp 低一点（0.1）增加动感
+        camera.position.lerp(camPos, isFirstPerson ? 0.95 : 0.1);
+
+        // 计算相机看向的目标点
+        const lookTarget = currentLook.clone().applyMatrix4(visualChassis.matrixWorld);
+        camera.lookAt(lookTarget);
+        // const seatOffset = new THREE.Vector3(0.4, 4, 8); 
+        // const camPos = seatOffset.applyMatrix4(visualChassis.matrixWorld);
+        // camera.position.lerp(camPos, 0.3);
+
+        // const lookOffset = new THREE.Vector3(0.35, -0.1, -1); 
+        // const lookTarget = lookOffset.applyMatrix4(visualChassis.matrixWorld);
+        // camera.lookAt(lookTarget);
+
+        const mPos = new THREE.Vector3(-1.2, 0.5, 0.5).applyMatrix4(visualChassis.matrixWorld);
+        mirrorCamera.position.copy(mPos);
+        const mLook = new THREE.Vector3(-5, -0.5, 15).applyMatrix4(visualChassis.matrixWorld);
+        mirrorCamera.lookAt(mLook);
+
+        renderer.render(scene, camera);
+        mirrorRenderer.render(scene, mirrorCamera);
+
+        if (chassisBody.position.y < -15) resetCar();
+        if (Date.now() % 60 === 0 && chassisBody.position.y > -1) {
+            lastSafePosition.copy(chassisBody.position);
+            lastSafeQuaternion.copy(chassisBody.quaternion);
+        }
+    }
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        const m = document.getElementById('mirror-left');
+        mirrorRenderer.setSize(m.clientWidth, m.clientHeight);
+        mirrorCamera.aspect = m.clientWidth / m.clientHeight;
+        mirrorCamera.updateProjectionMatrix();
+    });
+</script>
+</body>
 </html>
