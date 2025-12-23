@@ -9,12 +9,20 @@
         #cockpit-overlay {
             position: absolute; bottom: 0; left: 0; width: 100%; height: 100%;
             z-index: 10; pointer-events: none;
-            background-image: url('image2.png'); 
+            background-image: url('image22.png'); 
             background-size: cover; background-position: center bottom;
+            filter: 
+                brightness(0.7)    /* 压低亮度，模拟车内暗光环境 */
+                contrast(1.1)      /* 稍微增强对比度 */
+                saturate(0.8)      /* 降低饱和度，去掉那种廉价的彩色感 */
+                drop-shadow(0px 0px 20px rgba(0,0,0,0.5)); /* 增加边缘暗部 */
+            
+            /* --- 新增：暗角效果 (Vignette) --- */
+            mask-image: radial-gradient(circle, white 60%, black 120%);
         }
 
         #mirror-left {
-            position: absolute; left: 3%; bottom: 52%; width: 14vw; height: 7vw;
+            position: absolute; left: 2%; bottom: 51%; width: 14vw; height: 7vw;
             z-index: 5; border-radius: 50% 50% 40% 40%; border: 3px solid #333;
             background: #000; overflow: hidden; transform: rotate(2deg) scale(-1, 1);
         }
@@ -31,16 +39,20 @@
         {
             "imports": {
                 "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-                "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js"
+                "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
             }
         }
     </script>
 </head>
 <body>
 
+
+
 <div id="info">
     ⛰️ 秋名山特训 (无限生成版)<br>
     W 加速 | S 刹车/倒车 | A/D 转向 | Space 手刹<br>
+    M 开关音乐 | 推荐佩戴耳机
     注意：路会不断生成，掉下去按 R 重置
 </div>
 <div id="cockpit-overlay"></div>
@@ -49,20 +61,36 @@
 <script type="module">
     import * as THREE from 'three';
     import * as CANNON from 'cannon-es';
+    import { Sky } from 'https://unpkg.com/three@0.160.0/examples/jsm/objects/Sky.js';
 
     let world, scene, camera, renderer;
     let mirrorCamera, mirrorRenderer;
     let vehicle, chassisBody;
+    let sun;
     let visualChassis, visualWheels = [];
     let isFirstPerson = true; // 默认开启第一人称
+    let bgMusic;
+    let isMusicPlaying = false;
 
+    let audioCtx;
+    let windNoise;
+    let windGain;
+    let windFilter;
+    let masterGain; // 新增主开关
+
+    let currentTrackIndex = 0;
+    const playlist = [
+        'traffic-264578.mp3', // 你的第一首歌
+        'song2.mp3',          // 你的第二首歌（确保本地有这个文件）
+        'song3.mp3'           // 你的第三首歌
+    ];
     let lastSafePosition = new CANNON.Vec3(0, 2, 0);
     let lastSafeQuaternion = new CANNON.Quaternion();
     
     // --- 无限路段管理变量 ---
     const roadSegments = []; // 存储路段对象，用于后续删除
     let segmentCounter = 0;  // 当前生成的段数
-    let prevX = 0, prevZ = 0; // 上一段路末端坐标
+    let prevX = 0, prevY = 0, prevZ = 0; // 上一段路末端坐标
     const segLen = 15;        // 每段长度
     const roadWidth = 14;     // 路宽
     let roadMat, wallMat, roadTex; 
@@ -71,21 +99,130 @@
     init();
     animate();
 
+    function initWind() {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        const bufferSize = 4 * audioCtx.sampleRate;
+        const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+        const output = noiseBuffer.getChannelData(0);
+        let b0, b1, b2, b3, b4, b5, b6;
+        b0 = b1 = b2 = b3 = b4 = b5 = b6 = 0.0;
+        for (let i = 0; i < bufferSize; i++) {
+            const white = Math.random() * 2 - 1;
+            b0 = 0.99886 * b0 + white * 0.0555179;
+            b1 = 0.99332 * b1 + white * 0.0750759;
+            b2 = 0.96900 * b2 + white * 0.1538520;
+            b3 = 0.86650 * b3 + white * 0.3104856;
+            b4 = 0.55000 * b4 + white * 0.5329522;
+            b5 = -0.7616 * b5 - white * 0.0168980;
+            output[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
+            output[i] *= 0.11;
+            b6 = white * 0.115926;
+        }
+
+        windNoise = audioCtx.createBufferSource();
+        windNoise.buffer = noiseBuffer;
+        windNoise.loop = true;
+
+        // --- 核心：低通滤波器 (产生隆隆声) ---
+        windFilter = audioCtx.createBiquadFilter();
+        windFilter.type = 'lowpass'; // 改为低通，滤掉沙沙声
+        windFilter.frequency.value = 100; // 只要极低频
+        windFilter.Q.value = 2.0; // 增加一点共鸣感
+
+        // 调制层：负责“隆——隆——”的节奏感
+        windGain = audioCtx.createGain();
+        windGain.gain.value = 0.5;
+
+        // 使用更慢、不规则的振荡
+        const lfo = audioCtx.createOscillator();
+        lfo.type = 'triangle'; // 三角波比正弦波更有撞击感
+        lfo.frequency.value = 1.5; 
+        const lfoGain = audioCtx.createGain();
+        lfoGain.gain.value = 0.3; // 波动很大，产生起伏感
+        lfo.connect(lfoGain);
+        lfoGain.connect(windGain.gain);
+        lfo.start();
+
+        masterGain = audioCtx.createGain();
+        masterGain.gain.value = 0;
+
+        // 连路
+        windNoise.connect(windFilter);
+        windFilter.connect(windGain);
+        windGain.connect(masterGain);
+        masterGain.connect(audioCtx.destination);
+
+        windNoise.start();
+    }
+
+    function initMusic() {
+        // 使用一个舒缓的 Lo-fi 风格免版权音乐链接 (示例)
+        const musicUrl = 'traffic-264578.mp3'; 
+        
+        bgMusic = new Audio(musicUrl);
+        bgMusic.loop = true;      // 循环播放
+        bgMusic.volume = 0.4;    // 音量 40%，不干扰驾驶判断
+    }
+
     function init() {
+
         world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
         roadMat = new CANNON.Material();
         wallMat = new CANNON.Material();
         const wheelMat = new CANNON.Material();
 
         const roadContact = new CANNON.ContactMaterial(roadMat, wheelMat, { friction: 1.5, restitution: 0.0 });
-        const wallContact = new CANNON.ContactMaterial(wallMat, wheelMat, { friction: 0.1, restitution: 0.5 });
+        const wallContact = new CANNON.ContactMaterial(wallMat, wheelMat, { friction: 3, restitution: 0.0 });
         
         world.addContactMaterial(roadContact);
         world.addContactMaterial(wallContact);
 
         scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x87CEEB);
-        scene.fog = new THREE.Fog(0x87CEEB, 20, 400); // 增加雾气深度，让远端生成更自然
+
+        // --- 1. 先创建太阳灯光 (DirectionalLight) ---
+        sun = new THREE.DirectionalLight(0xffffff, 1.2);
+        sun.castShadow = true;
+        // 配置阴影范围
+        sun.shadow.camera.left = -150; sun.shadow.camera.right = 150;
+        sun.shadow.camera.top = 150; sun.shadow.camera.bottom = -150;
+        sun.shadow.mapSize.width = 2048; sun.shadow.mapSize.height = 2048;
+        scene.add(sun);
+
+        // 1. 创建天空对象
+        const sky = new Sky();
+        sky.scale.setScalar(450000); // 极其巨大的球体
+        scene.add(sky);
+
+        // 2. 配置大气参数
+        const skyUniforms = sky.material.uniforms;
+        skyUniforms['turbidity'].value = 0.5;      // 浑浊度 (1-20): 越高越像大雾天或黄昏
+        skyUniforms['rayleigh'].value = 4;       // 瑞利散射 (0-4): 越高天空越蓝
+        skyUniforms['mieCoefficient'].value = 0.001; // 散射系数: 模拟空气中的颗粒
+        skyUniforms['mieDirectionalG'].value = 0.95;  // 太阳光晕的扩散度
+
+        // 3. 设置太阳位置
+        const sunPosition = new THREE.Vector3();
+        const elevation = 2;   // 太阳高度角 (0=地平线, 90=头顶)
+        const azimuth = 180;   // 太阳方位角
+        const phi = THREE.MathUtils.degToRad(90 - elevation);
+        const theta = THREE.MathUtils.degToRad(azimuth);
+        sunPosition.setFromSphericalCoords(1, phi, theta);
+
+        // 将位置传递给天空着色器
+        skyUniforms['sunPosition'].value.copy(sunPosition);
+
+        // 4. 同步场景光照
+        // 找到你原有的 DirectionalLight (sun)，让它的位置与天空的太阳位置对齐
+        sun.position.copy(sunPosition.multiplyScalar(100)); 
+
+        // 5. 优化雾气颜色 (让远处的雾与天空地平线颜色融合)
+        // 这里建议用 FogExp2，颜色设为略微发白/浅蓝
+        scene.fog = new THREE.FogExp2(0xaaccff, 0.0008);
+
+        const hemiLight = new THREE.HemisphereLight(0xffffff, 0x443322, 1.5);
+        scene.add(hemiLight);
+
 
         camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
         mirrorCamera = new THREE.PerspectiveCamera(60, 1.8, 0.1, 500);
@@ -93,6 +230,10 @@
         renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.shadowMap.enabled = true;
+
+        renderer.toneMapping = THREE.ACESFilmicToneMapping; // 电影级色调映射
+        renderer.toneMappingExposure = 1.0;                // 曝光度
+        renderer.outputColorSpace = THREE.SRGBColorSpace;   // 开启 sRGB 色彩空间
         document.body.appendChild(renderer.domElement);
 
         const mDiv = document.getElementById('mirror-left');
@@ -100,16 +241,10 @@
         mirrorRenderer.setSize(mDiv.clientWidth, mDiv.clientHeight);
         mDiv.appendChild(mirrorRenderer.domElement);
 
-        const sun = new THREE.DirectionalLight(0xffffff, 1.2);
-        sun.position.set(50, 100, 50);
-        sun.castShadow = true;
-        scene.add(sun);
-        scene.add(new THREE.AmbientLight(0x555555));
-
         // 准备路面纹理
         const canvas = document.createElement('canvas'); canvas.width=128; canvas.height=128;
         const ctx = canvas.getContext('2d');
-        ctx.fillStyle='#444'; ctx.fillRect(0,0,128,128);
+        ctx.fillStyle='#666'; ctx.fillRect(0,0,128,128);
         ctx.fillStyle='#fff'; ctx.fillRect(60,0,8,40); ctx.fillRect(60,64,8,40);
         roadTex = new THREE.CanvasTexture(canvas);
         roadTex.wrapS = THREE.RepeatWrapping; roadTex.wrapT = THREE.RepeatWrapping;
@@ -228,119 +363,110 @@
     // ================== 核心修改：单段生成逻辑 ==================
     function generateNextSegment() {
         const i = segmentCounter;
-        // 使用与原逻辑相同的S型弯道算法
-        const curve = Math.sin(i * 0.1) * 30 + Math.sin(i * 0.03) * 60;
-        const x = curve;
+        
+        // --- 1. 路径算法 (S弯 + 上下坡) ---
+        let x = 0;
+        let y = 0;
+        if (i >= 5) { // 前5段保持直线，给玩家反应时间
+            const t = i - 5;
+            // S弯组合：0.2决定频率(越快弯越急)，35决定幅度
+            x = Math.sin(t * 0.2) * 35 + Math.sin(t * 0.05) * 60;
+            // 坡度组合：0.08决定起伏频率，25决定山丘高度
+            y = Math.sin(t * 0.08) * 25; 
+        }
         const z = -i * segLen;
-        const y = 0;
 
-        const segmentData = {
-            bodies: [],
-            meshes: []
-        };
+        const segmentData = { bodies: [], meshes: [] };
 
         if (i > 0) {
+            // 计算当前段相对于上一段的位移
             const dx = x - prevX;
+            const dy = y - prevY;
             const dz = z - prevZ;
-            const len = Math.sqrt(dx*dx + dz*dz);
-            const angle = Math.atan2(dx, dz);
+            const horizontalLen = Math.sqrt(dx * dx + dz * dz);
+            const totalLen = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            
+            // 计算转向角(Yaw)和俯仰角(Pitch)
+            const yaw = Math.atan2(dx, dz); 
+            const pitch = -Math.atan2(dy, horizontalLen); 
 
-            // 物理路面
+            // 创建临时物理向量用于计算，避免 TypeError: vadd is not a function
+            const calcVec = new CANNON.Vec3();
+
+            // --- 2. 物理路面生成 ---
             const roadBody = new CANNON.Body({ mass: 0, material: roadMat });
-            roadBody.addShape(new CANNON.Box(new CANNON.Vec3(roadWidth/2, 1, len/2 + 0.5))); 
-            roadBody.position.set((x+prevX)/2, -1, (z+prevZ)/2);
-            const q = new CANNON.Quaternion();
-            q.setFromAxisAngle(new CANNON.Vec3(0,1,0), angle);
-            roadBody.quaternion = q;
+            // 物理盒子稍微加长一点(0.5)防止路段缝隙颠簸
+            roadBody.addShape(new CANNON.Box(new CANNON.Vec3(roadWidth / 2, 1, totalLen / 2 + 0.5)));
+            roadBody.position.set((x + prevX) / 2, (y + prevY) / 2 - 1, (z + prevZ) / 2);
+
+            // 设置旋转：先偏航再俯仰
+            const qYaw = new CANNON.Quaternion();
+            qYaw.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), yaw);
+            const qPitch = new CANNON.Quaternion();
+            qPitch.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), pitch);
+            roadBody.quaternion = qYaw.mult(qPitch);
+
             world.addBody(roadBody);
             segmentData.bodies.push(roadBody);
 
-            // 视觉路面
+            // --- 3. 视觉路面生成 ---
             const roadMesh = new THREE.Mesh(
-                new THREE.BoxGeometry(roadWidth, 0.2, len + 1),
+                new THREE.BoxGeometry(roadWidth, 0.2, totalLen + 1),
                 new THREE.MeshLambertMaterial({ map: roadTex })
             );
-            roadMesh.position.copy(roadBody.position);
-            roadMesh.position.y = 0;
+            // 将视觉模型对齐到物理身体的顶面 (y=1的地方)
+            roadBody.pointToWorldFrame(new CANNON.Vec3(0, 1, 0), calcVec);
+            roadMesh.position.set(calcVec.x, calcVec.y, calcVec.z);
             roadMesh.quaternion.copy(roadBody.quaternion);
             roadMesh.receiveShadow = true;
             scene.add(roadMesh);
             segmentData.meshes.push(roadMesh);
 
-            // 左侧山壁
+            // --- 4. 左侧山壁生成 (跟随坡度) ---
             const wallBody = new CANNON.Body({ mass: 0, material: wallMat });
-            wallBody.addShape(new CANNON.Box(new CANNON.Vec3(1, 5, len/2)));
-            const wallOffset = new CANNON.Vec3(-roadWidth/2 - 1, 4, 0); 
-            roadBody.pointToWorldFrame(wallOffset, wallBody.position);
+            wallBody.addShape(new CANNON.Box(new CANNON.Vec3(1, 8, totalLen / 2)));
+            roadBody.pointToWorldFrame(new CANNON.Vec3(-roadWidth / 2 - 1, 5, 0), wallBody.position);
             wallBody.quaternion.copy(roadBody.quaternion);
             world.addBody(wallBody);
             segmentData.bodies.push(wallBody);
 
             const wallMesh = new THREE.Mesh(
-                new THREE.BoxGeometry(2, 10, len+2),
-                new THREE.MeshLambertMaterial({ color: 0x5c4033 })
+                new THREE.BoxGeometry(2, 16, totalLen + 2),
+                new THREE.MeshLambertMaterial({ color: 0x4d3c2e })
             );
-            wallMesh.position.copy(wallBody.position);
+            wallMesh.position.set(wallBody.position.x, wallBody.position.y, wallBody.position.z);
             wallMesh.quaternion.copy(wallBody.quaternion);
             scene.add(wallMesh);
             segmentData.meshes.push(wallMesh);
 
-            // 右侧装饰树
-            if (i % 3 === 0) {
-                const tree = createSimpleTree();
-                const treeOffset = new CANNON.Vec3(roadWidth/2 + 2 + Math.random()*5, 0, 0);
-                const treePos = new CANNON.Vec3();
-                roadBody.pointToWorldFrame(treeOffset, treePos);
-                tree.position.copy(treePos);
-                scene.add(tree);
-                segmentData.meshes.push(tree);
-            }
-
-            // 1. 右侧悬崖护栏 (安全感+1)
-            const railGeo = new THREE.BoxGeometry(0.2, 0.8, len);
-            const railMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa });
-            const rail = new THREE.Mesh(railGeo, railMat);
-            // 计算护栏位置：路面右边缘
-            const railOffset = new CANNON.Vec3(roadWidth / 2 - 0.5, 0.4, 0);
-            const railPos = new CANNON.Vec3();
-            roadBody.pointToWorldFrame(railOffset, railPos);
-            rail.position.copy(railPos);
+            // --- 5. 右侧护栏生成 (跟随坡度) ---
+            const rail = new THREE.Mesh(
+                new THREE.BoxGeometry(0.3, 1, totalLen),
+                new THREE.MeshStandardMaterial({ color: 0xeeeeee })
+            );
+            roadBody.pointToWorldFrame(new CANNON.Vec3(roadWidth / 2 - 0.5, 0.6, 0), calcVec);
+            rail.position.set(calcVec.x, calcVec.y, calcVec.z);
             rail.quaternion.copy(roadBody.quaternion);
             scene.add(rail);
             segmentData.meshes.push(rail);
 
-            // 2. 远山装饰 (让背景不空洞)
-            if (i % 5 === 0) {
-                const mountainGeo = new THREE.ConeGeometry(30 + Math.random() * 20, 100, 4);
-                const mountainMat = new THREE.MeshLambertMaterial({ color: 0x3d4c33 });
-                const distMountain = new THREE.Mesh(mountainGeo, mountainMat);
-                // 随机放在左侧山后或右侧深渊远方
-                const side = Math.random() > 0.5 ? 1 : -1;
-                distMountain.position.set(x + side * (100 + Math.random() * 50), -20, z - 100);
-                distMountain.rotation.y = Math.random() * Math.PI;
-                scene.add(distMountain);
-                segmentData.meshes.push(distMountain);
-            }
-
-            // 3. 路边乱石 (增加细节)
-            if (Math.random() > 0.7) {
-                const rockGeo = new THREE.DodecahedronGeometry(1 + Math.random() * 2, 0);
-                const rockMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
-                const rock = new THREE.Mesh(rockGeo, rockMat);
-                const rockOffset = new CANNON.Vec3(-roadWidth / 2 - 2, 0, Math.random() * 5);
-                const rockPos = new CANNON.Vec3();
-                roadBody.pointToWorldFrame(rockOffset, rockPos);
-                rock.position.copy(rockPos);
+            // --- 6. 装饰：随机乱石 ---
+            if (Math.random() > 0.8) {
+                const rock = new THREE.Mesh(
+                    new THREE.DodecahedronGeometry(1 + Math.random() * 2, 0),
+                    new THREE.MeshLambertMaterial({ color: 0x777777 })
+                );
+                roadBody.pointToWorldFrame(new CANNON.Vec3(-roadWidth / 2 - 3, 1, (Math.random()-0.5)*10), calcVec);
+                rock.position.set(calcVec.x, calcVec.y, calcVec.z);
                 rock.rotation.set(Math.random(), Math.random(), Math.random());
                 scene.add(rock);
                 segmentData.meshes.push(rock);
             }
         }
 
+        // 内存清理：保留最近80段，删除过后的路段
         roadSegments.push(segmentData);
-        
-        // 保持内存整洁：删除 100 段以前的路面
-        if (roadSegments.length > 100) {
+        if (roadSegments.length > 80) {
             const oldSeg = roadSegments.shift();
             oldSeg.bodies.forEach(b => world.removeBody(b));
             oldSeg.meshes.forEach(m => {
@@ -350,10 +476,10 @@
             });
         }
 
-        prevX = x; prevZ = z;
+        // 更新上一段的坐标
+        prevX = x; prevY = y; prevZ = z;
         segmentCounter++;
     }
-
     function createSimpleTree() {
         const g = new THREE.Group();
         const t = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 2), new THREE.MeshLambertMaterial({color:0x553311}));
@@ -369,7 +495,30 @@
         const maxForce = 2500;
         const maxSteer = 0.45;
 
+
+        // 首次交互启动音乐
+        if (up && !bgMusic) {
+            initMusic();
+            isMusicPlaying = !isMusicPlaying;
+            bgMusic.play().catch(err => console.log("等待交互以播放音频"));
+
+            if (!audioCtx) {
+                initWind();
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+            }
+        }
+
         switch(e.key.toLowerCase()) {
+            case 'm': // M 键切换静音
+                if (up && bgMusic) {
+                    if (isMusicPlaying) {
+                        bgMusic.pause();
+                    } else {
+                        bgMusic.play().catch(err => console.log("等待交互以播放音频"));
+                    }
+                    isMusicPlaying = !isMusicPlaying;
+                }
+                break;
             case 'w':
                 const f = up ? maxForce : 0;
                 vehicle.applyEngineForce(0, 0); vehicle.applyEngineForce(0, 1);
@@ -438,7 +587,7 @@
 
         // 定义两种视角的参数
         const tpSeatOffset = new THREE.Vector3(0, 5, 10);      // 第三人称：高处往后
-        const fpSeatOffset = new THREE.Vector3(-0.4, 1.2, -1);  // 第一人称：驾驶员头部位置
+        const fpSeatOffset = new THREE.Vector3(-0.4, 1.5, -1);  // 第一人称：驾驶员头部位置
 
         const tpLookOffset = new THREE.Vector3(0, 0, -5);      // 第三人称：看车头前方
         const fpLookOffset = new THREE.Vector3(-0.4, -1.5, -10); // 第一人称：平视远方
@@ -475,10 +624,34 @@
         renderer.render(scene, camera);
         mirrorRenderer.render(scene, mirrorCamera);
 
-        if (chassisBody.position.y < -15) resetCar();
+        if (chassisBody.position.y < prevY - 30) {
+            resetCar();
+        }
         if (Date.now() % 60 === 0 && chassisBody.position.y > -1) {
             lastSafePosition.copy(chassisBody.position);
             lastSafeQuaternion.copy(chassisBody.quaternion);
+        }
+
+        if (masterGain && windFilter) {
+            const speed = chassisBody.velocity.length(); 
+            const now = audioCtx.currentTime;
+
+            // 依然是速度超过 15 (约 50km/h) 启动
+            if (speed < 15) {
+                masterGain.gain.setTargetAtTime(0, now, 0.1);
+            } else {
+                // 1. 音量：随速度快速增强
+                const targetGain = Math.min(Math.pow((speed - 15) / 40, 1.5), 1.2); 
+                masterGain.gain.setTargetAtTime(targetGain, now, 0.3);
+
+                // 2. 频率：关键！保持在低频区间 (80Hz - 400Hz)
+                // 只有在低频徘徊，才会有“隆隆”的重感
+                const targetFreq = 80 + (speed * 4); 
+                windFilter.frequency.setTargetAtTime(Math.min(targetFreq, 450), now, 0.3);
+                
+                // 3. 动态Q值：越快，震动感越强
+                windFilter.Q.setTargetAtTime(1.0 + (speed / 30), now, 0.3);
+            }
         }
     }
 
