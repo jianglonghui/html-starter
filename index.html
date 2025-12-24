@@ -52,8 +52,8 @@
 <div id="info">
     ⛰️ 秋名山特训 (无限生成版)<br>
     W 加速 | S 刹车/倒车 | A/D 转向 | Space 手刹<br>
-    M 开关音乐 | 推荐佩戴耳机
-    注意：路会不断生成，掉下去按 R 重置
+    M 开关音乐 | V 切换视角 | R 重置<br>
+    C 采集模式 | L 学习 | T 训练
 </div>
 <div id="cockpit-overlay"></div>
 <div id="mirror-left"></div>
@@ -62,6 +62,12 @@
     import * as THREE from 'three';
     import * as CANNON from 'cannon-es';
     import { Sky } from 'https://unpkg.com/three@0.160.0/examples/jsm/objects/Sky.js';
+    import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+    import { TrafficManager, NPCVehicle, calculateRoadPoint} from './traffic.js';
+    import {AutoTuner} from './AutoTuner.js';
+    import { trainedData } from './trained_data.js';
+
+    let orbitControls;
 
     let world, scene, camera, renderer;
     let mirrorCamera, mirrorRenderer;
@@ -71,6 +77,7 @@
     let isFirstPerson = true; // 默认开启第一人称
     let bgMusic;
     let isMusicPlaying = false;
+    let traffic;
 
     let audioCtx;
     let windNoise;
@@ -95,6 +102,190 @@
     const roadWidth = 14;     // 路宽
     let roadMat, wallMat, roadTex; 
     // -----------------------
+
+    
+
+    let isTuningMode = false; // 设为 false 先记录人类驾驶数据
+    let tuner = null;
+    let tuningTimer = 0;
+    const TEST_DURATION = 60 * 20; // 每代测试 20 秒 (60帧/秒 * 20)
+    let globalCarId = 0; // 全局唯一车辆ID
+
+    // 人类驾驶数据记录（行为克隆）
+    let humanDrivingData = {
+        samples: [],           // 状态-动作对
+        totalCTE: 0,
+        sampleCount: 0,
+        totalDistance: 0,
+        lastZ: 0,
+        lastSpeed: 0           // 用于计算加速度
+    };
+
+    // 采样目标点可视化（让人类看到AI看到的目标）
+    let targetMarker = null;
+    const SAMPLE_LOOK_AHEAD = 18; // 采样用的预瞄距离，和AI训练时一致
+    let isCollectingMode = false; // 采集模式开关
+
+    // 学习到的控制策略
+    let learnedPolicy = null;
+
+    // 从文件加载预训练数据
+    if (trainedData.samples && trainedData.samples.length > 0) {
+        humanDrivingData.samples = trainedData.samples;
+        window.humanDrivingSamples = trainedData.samples;
+        console.log(`%c 📂 从文件加载了 ${trainedData.samples.length} 个样本`, 'color: #0f0;');
+    }
+    if (trainedData.learnedPolicy) {
+        learnedPolicy = trainedData.learnedPolicy;
+        window.learnedPolicy = trainedData.learnedPolicy;
+        console.log('%c 📂 从文件加载了学习策略', 'color: #0f0;');
+    }
+    if (trainedData.bestDNA) {
+        window.bestTrainedDNA = trainedData.bestDNA;
+        console.log('%c 📂 从文件加载了最佳参数', 'color: #0f0;', trainedData.bestDNA);
+    }
+
+    // 导出当前数据（复制输出到 trained_data.js）
+    window.exportTrainingData = function() {
+        const data = {
+            samples: humanDrivingData.samples,
+            learnedPolicy: learnedPolicy,
+            bestDNA: window.bestTrainedDNA
+        };
+        const jsonStr = JSON.stringify(data, null, 2);
+        console.log('%c 📋 复制以下内容到 trained_data.js:', 'background: #f0a; color: #fff; font-size: 14px;');
+        console.log(`export const trainedData = ${jsonStr};`);
+
+        // 也提供下载
+        const blob = new Blob([`export const trainedData = ${jsonStr};`], {type: 'text/javascript'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'trained_data.js';
+        a.click();
+        URL.revokeObjectURL(url);
+        console.log('%c ⬇️ 文件已下载，替换项目中的 trained_data.js 即可', 'color: #0ff;');
+    };
+
+    // 查看人类驾驶数据
+    window.getHumanBaseline = function() {
+        if (humanDrivingData.samples.length === 0) {
+            console.warn('没有记录到数据，请先驾驶一段时间！');
+            return null;
+        }
+        const avgCTE = humanDrivingData.totalCTE / humanDrivingData.sampleCount;
+        const avgSpeed = humanDrivingData.samples.reduce((a, b) => a + b.speed, 0) / humanDrivingData.samples.length;
+        console.log('%c 人类驾驶数据 ', 'background: #0a0; color: #fff; font-size: 14px;');
+        console.table({
+            '样本数': humanDrivingData.samples.length,
+            '平均CTE': avgCTE.toFixed(3) + 'm',
+            '平均速度': avgSpeed.toFixed(1) + 'm/s',
+            '总行驶距离': humanDrivingData.totalDistance.toFixed(1) + 'm'
+        });
+        return { avgCTE, avgSpeed, samples: humanDrivingData.samples };
+    };
+
+    // 从人类数据学习控制策略（线性回归拟合）
+    window.learnFromHuman = function() {
+        const samples = humanDrivingData.samples;
+        if (samples.length < 100) {
+            console.warn('数据太少，请至少驾驶30秒以上！当前样本数：' + samples.length);
+            return;
+        }
+
+        const n = samples.length;
+
+        // 1. 计算转向增益：steer = steerGain * angleToTarget
+        // 使用最小二乘法：steerGain = Σ(angle * steer) / Σ(angle²)
+        let sumAngle2 = 0, sumAngleSteer = 0;
+        samples.forEach(s => {
+            sumAngle2 += s.angleToTarget * s.angleToTarget;
+            sumAngleSteer += s.angleToTarget * s.steer;
+        });
+        const steerGain = Math.abs(sumAngleSteer / (sumAngle2 + 0.001));
+
+        // 2. 计算平均速度
+        const avgSpeed = samples.reduce((a, b) => a + b.speed, 0) / n;
+
+        // 3. 估算引擎力：基于平均速度反推
+        // AI公式: force = (targetSpeed - currentSpeed) * engineForce
+        // 假设稳态时 force ≈ 阻力，速度与engineForce成正比
+        // 经验公式：avgSpeed ≈ 15m/s 对应 engineForce ≈ 3500
+        const engineForce = (avgSpeed / 15) * 3500;
+
+        // 4. 平均CTE作为基准
+        const avgCTE = humanDrivingData.totalCTE / humanDrivingData.sampleCount;
+
+        learnedPolicy = {
+            steerGain: steerGain,
+            engineForce: engineForce,
+            avgSpeed: avgSpeed,
+            avgCTE: avgCTE,
+            sampleCount: n
+        };
+
+        // 同步到全局，供AutoTuner和AI使用
+        window.learnedPolicy = learnedPolicy;
+        window.humanDrivingSamples = samples;  // 行为克隆用
+
+        console.log('%c 🎓 学习完成！', 'background: #f0a; color: #fff; font-size: 16px;');
+        console.log('%c 计算出的AI参数：', 'color: #0ff; font-weight: bold;');
+        console.table({
+            'steerGain (转向增益)': learnedPolicy.steerGain.toFixed(3),
+            'engineForce (引擎力)': learnedPolicy.engineForce.toFixed(0),
+            '人类平均速度': learnedPolicy.avgSpeed.toFixed(1) + ' m/s',
+            '人类平均CTE': learnedPolicy.avgCTE.toFixed(3) + ' m',
+            '样本数量': learnedPolicy.sampleCount
+        });
+        console.log('%c 行为克隆已启用！AI将直接模仿你的驾驶风格', 'color: #0f0;');
+
+        window.humanBaseline = {
+            avgCTE: avgCTE,
+            avgSpeed: avgSpeed
+        };
+
+        return learnedPolicy;
+    };
+
+    // 开始训练模式
+    window.startTraining = function() {
+        if (!learnedPolicy) {
+            console.warn('请先调用 learnFromHuman() 学习人类驾驶策略！');
+            return;
+        }
+        isTuningMode = true;
+        console.log('%c 🚗 开始AI训练，使用学习到的策略 ', 'background: #00f; color: #fff;');
+    };
+
+    // 停止训练，应用结果到普通模式
+    window.stopTraining = function() {
+        if (!isTuningMode) {
+            console.warn('当前不在训练模式');
+            return;
+        }
+
+        // 清理训练车辆
+        if (tuner && tuner.population) {
+            tuner.population.forEach(ind => {
+                if (ind.car) {
+                    ind.car.destroy();
+                    ind.car = null;
+                }
+            });
+        }
+
+        isTuningMode = false;
+        tuner = null;
+
+        console.log('%c 🏁 训练结束！', 'background: #0a0; color: #fff; font-size: 16px;');
+        if (window.bestTrainedDNA) {
+            console.log('%c 最佳参数已应用到普通模式：', 'color: #0ff;');
+            console.table(window.bestTrainedDNA);
+        }
+        if (window.humanDrivingSamples) {
+            console.log(`行为克隆样本：${window.humanDrivingSamples.length} 个`);
+        }
+    };
 
     init();
     animate();
@@ -236,6 +427,14 @@
         renderer.outputColorSpace = THREE.SRGBColorSpace;   // 开启 sRGB 色彩空间
         document.body.appendChild(renderer.domElement);
 
+        // 自由相机控制 (AutoTuner模式)
+        orbitControls = new OrbitControls(camera, renderer.domElement);
+        orbitControls.enableDamping = true;
+        orbitControls.dampingFactor = 0.05;
+        orbitControls.target.set(0, 0, -100); // 看向路的方向
+        camera.position.set(0, 50, 50);       // 俯视初始位置
+        orbitControls.update();
+
         const mDiv = document.getElementById('mirror-left');
         mirrorRenderer = new THREE.WebGLRenderer({ alpha: false });
         mirrorRenderer.setSize(mDiv.clientWidth, mDiv.clientHeight);
@@ -353,6 +552,30 @@
             scene.add(wheelGroup);
             visualWheels.push(wheelGroup);
         });
+
+        // 在 init 函数末尾
+        traffic = new TrafficManager(world, scene, chassisBody);
+        traffic.generateWaypoints(chassisBody.position.z);
+
+        // 创建采样目标点标记（醒目的绿色光球）
+        const markerGeo = new THREE.SphereGeometry(1.5, 16, 16);
+        const markerMat = new THREE.MeshBasicMaterial({
+            color: 0x00ff00,
+            transparent: true,
+            opacity: 0.8
+        });
+        targetMarker = new THREE.Mesh(markerGeo, markerMat);
+        // 添加发光效果
+        const glowGeo = new THREE.SphereGeometry(2.5, 16, 16);
+        const glowMat = new THREE.MeshBasicMaterial({
+            color: 0x00ff00,
+            transparent: true,
+            opacity: 0.3
+        });
+        const glow = new THREE.Mesh(glowGeo, glowMat);
+        targetMarker.add(glow);
+        targetMarker.visible = false; // 默认隐藏，按C开启
+        scene.add(targetMarker);
 
         document.addEventListener('keydown', handler);
         document.addEventListener('keyup', handler);
@@ -551,6 +774,30 @@
                     document.getElementById('cockpit-overlay').style.display = isFirstPerson ? 'block' : 'none';
                 }
                 break;
+            case 'c':
+                if (up) {
+                    isCollectingMode = !isCollectingMode;
+                    if (targetMarker) {
+                        targetMarker.visible = isCollectingMode;
+                    }
+                    console.log(`%c ${isCollectingMode ? '🟢 采集模式开启' : '⚪ 采集模式关闭'}`,
+                        `color: ${isCollectingMode ? '#0f0' : '#888'};`);
+                }
+                break;
+            case 'l':
+                if (up) {
+                    window.learnFromHuman();
+                }
+                break;
+            case 't':
+                if (up) {
+                    if (isTuningMode) {
+                        window.stopTraining();  // 训练中按T停止
+                    } else {
+                        window.startTraining(); // 非训练按T开始
+                    }
+                }
+                break;
         }
     }
 
@@ -563,96 +810,317 @@
         chassisBody.angularVelocity.set(0,0,0);
     }
 
+    function resetTuningScene() {
+        if (traffic && traffic.vehicles) {
+            traffic.vehicles.forEach(v => v.destroy());
+            traffic.vehicles = [];
+        }
+
+        // 基于玩家位置计算起始点（往前一点，不要太远）
+        const playerZ = chassisBody.position.z;
+        const baseZ = playerZ + 10; // 在玩家前方30米开始生成
+
+        // 1. 清理调优种群中的旧车
+        tuner.population.forEach((ind, index) => {
+            if (ind.car) {
+                ind.car.destroy();
+                ind.car = null;
+            }
+
+            // 2. 初始化本轮数据
+            ind.isAlive = true;
+            ind.distTraveled = 0;
+            ind.totalCTE = 0;
+            ind.totalSpeed = 0;
+            ind.tickCount = 0;
+            ind.lane = Math.random() > 0.5 ? 3.5 : -3.5;
+            ind.startZ = baseZ - (index * 15); // 拉开15米间距，避免挤在一起
+            ind.lastDistCheck = 0;
+            ind.uid = globalCarId++;
+            ind.totalLifeTicks = 0;
+            ind.stuckTicks = 0;
+
+            // 3. 生成新车
+            ind.car = new NPCVehicle(ind.startZ, ind.lane, world, scene, ind.dna);
+        });
+
+        // 更新路点
+        traffic.generateWaypoints(baseZ);
+
+        // 重置主参考体到当前路面位置
+        const roadPoint = calculateRoadPoint(baseZ);
+        chassisBody.velocity.set(0, 0, 0);
+        chassisBody.position.set(roadPoint.x, roadPoint.y + 2, baseZ);
+
+        // 更新相机位置到车辆附近
+        if (orbitControls) {
+            camera.position.set(roadPoint.x, roadPoint.y + 50, baseZ + 80);
+            orbitControls.target.set(roadPoint.x, roadPoint.y, baseZ - 50);
+            orbitControls.update();
+        }
+
+        console.log(`🚗 训练场景重置: baseZ=${baseZ.toFixed(0)}, 路面Y=${roadPoint.y.toFixed(1)}`);
+    }
+
+    // 在主 animate 循环中
+    function autoTuningLoop() {
+        if (!tuner) {
+            tuner = new AutoTuner(6);  // 减少到6辆车
+            resetTuningScene(); // 仅在第一次或进化时重置
+        }
+
+        // 获取当前存活的 NPC 列表用于避让计算
+        const aliveNPCs = tuner.population
+            .filter(ind => ind.isAlive && ind.car)
+            .map(ind => ind.car);
+
+        // 加速仿真：每帧运行 4 次物理
+        for (let i = 0; i < 4; i++) {
+            world.step(1 / 60);
+            
+            tuner.population.forEach(ind => {
+                if (ind.isAlive && ind.car) {
+                    // 修正：传入路点、参考体、以及所有NPC列表
+                    ind.car.drive(traffic.waypoints, chassisBody, aliveNPCs);
+
+                    const pos = ind.car.chassisBody.position;
+                    ind.distTraveled = Math.abs(pos.z - ind.startZ); 
+
+                    
+                    const road = calculateRoadPoint(pos.z);
+                    if (road) {
+                        const currentCTE = Math.abs(pos.x - (road.x + ind.lane));
+                        const currentSpeed = ind.car.chassisBody.velocity.length();
+                        ind.totalCTE += currentCTE;
+                        ind.totalSpeed += currentSpeed;
+                        ind.tickCount++;
+                        ind.totalLifeTicks++;
+
+                        // 启动保护期（稳定期240 + 缓冲60 = 300 ticks后再检测）
+                        const isWarmedUp = ind.tickCount > 300;
+
+                        // 卡住检测：只在保护期结束后才开始检查
+                        if (isWarmedUp && ind.tickCount % 60 === 0) {
+                            const distDelta = ind.distTraveled - ind.lastDistCheck;
+                            if (distDelta < 2) {
+                                // 前进不足2米，增加卡住计数
+                                ind.stuckTicks++;
+                            } else {
+                                // 有前进，重置计数
+                                ind.stuckTicks = 0;
+                            }
+                            ind.lastDistCheck = ind.distTraveled;
+                        }
+
+                        // 翻车检测：车身倾斜超过60度（启动后）
+                        const q = ind.car.chassisBody.quaternion;
+                        const upY = 1 - 2 * (q.x * q.x + q.z * q.z);
+                        const isFlipped = isWarmedUp && upY < 0.5;
+
+                        // 死亡判定（连续5次检测都没前进才算卡住）
+                        const isStuck = isWarmedUp && ind.stuckTicks >= 5;
+                        const speed = ind.car.chassisBody.velocity.length();
+
+                        if (ind.totalLifeTicks > 600 && ind.totalLifeTicks % 60 === 0) {
+                          console.log(`车#${ind.uid}: CTE=${currentCTE.toFixed(1)}, speed=${speed.toFixed(1)}, upY=${upY.toFixed(2)}, 
+                            stuckTicks=${ind.stuckTicks}, dist=${ind.distTraveled.toFixed(1)}, lastDist=${ind.lastDistCheck.toFixed(1)}`);
+                        }
+                        // 更新车顶标签
+                        if (ind.car.updateLabel) {
+                            const info = `spd:${speed.toFixed(1)} stk:${ind.stuckTicks} CTE:${currentCTE.toFixed(1)}`;
+                            ind.car.updateLabel(ind.uid, info);
+                        }
+
+                        if (currentCTE > 10 || pos.y < -10 || isFlipped || isStuck) {
+                            ind.isAlive = false;
+                            ind.car.destroy();
+                            ind.car = null;
+                        }
+                    }
+                }
+            });
+        }
+
+        tuningTimer += 4;
+
+        const allDead = tuner.population.every(ind => !ind.isAlive);
+        if (tuningTimer >= TEST_DURATION || allDead) {
+            tuner.evolve();    
+            resetTuningScene(); 
+            tuningTimer = 0;
+        }
+
+        // 自由相机控制
+        if (orbitControls) {
+            orbitControls.update();
+        }
+    }
+
     function animate() {
         requestAnimationFrame(animate);
-        world.step(1 / 60);
+        if (isTuningMode) {
+          autoTuningLoop();
+        } else {
+          world.step(1 / 60);
 
-        // --- 核心修改：无限生成触发器 ---
-        // 如果车辆靠近最后一段路面（剩余不到15段时），生成新的
-        if (chassisBody.position.z < prevZ + (segLen * 15)) {
-            generateNextSegment();
+          // --- 核心修改：无限生成触发器 ---
+          if (chassisBody.position.z < prevZ + (segLen * 15)) {
+              generateNextSegment();
+          }
+
+          // --- 记录人类驾驶数据（行为克隆）---
+          const pos = chassisBody.position;
+          const speed = chassisBody.velocity.length();
+          const road = calculateRoadPoint(pos.z);
+
+          // 只在采集模式下显示绿球和记录数据
+          if (isCollectingMode) {
+              // 计算并显示采样目标点（让人类看到AI看到的目标）
+              const targetRoad = calculateRoadPoint(pos.z - SAMPLE_LOOK_AHEAD);
+              if (targetRoad && targetMarker) {
+                  targetMarker.position.set(targetRoad.x, targetRoad.y + 1.5, targetRoad.z);
+                  // 脉冲动画效果
+                  const pulse = 1 + Math.sin(Date.now() * 0.005) * 0.2;
+                  targetMarker.scale.setScalar(pulse);
+              }
+          }
+
+          if (isCollectingMode && road && speed > 1) { // 只在采集模式+移动时记录
+              // 计算状态
+              const cte = pos.x - road.x; // 带符号的横向偏差
+              const steer = vehicle.wheelInfos[0].steering || 0;
+              const targetRoad = calculateRoadPoint(pos.z - SAMPLE_LOOK_AHEAD);
+
+              if (targetRoad) {
+                  visualChassis.updateMatrixWorld();
+                  const invMat = new THREE.Matrix4().copy(visualChassis.matrixWorld).invert();
+                  const worldTarget = new THREE.Vector3(targetRoad.x, targetRoad.y, targetRoad.z);
+                  const localTarget = worldTarget.clone().applyMatrix4(invMat);
+                  const angleToTarget = Math.atan2(localTarget.x, -localTarget.z);
+
+                  humanDrivingData.totalCTE += Math.abs(cte);
+                  humanDrivingData.sampleCount++;
+
+                  // 计算行驶距离
+                  if (humanDrivingData.lastZ !== 0) {
+                      humanDrivingData.totalDistance += Math.abs(pos.z - humanDrivingData.lastZ);
+                  }
+                  humanDrivingData.lastZ = pos.z;
+
+                  // 计算加速度 (m/s²)
+                  const acceleration = (speed - humanDrivingData.lastSpeed) * 60; // 乘60是因为每帧1/60秒
+                  humanDrivingData.lastSpeed = speed;
+
+                  // 每5帧记录一个状态-动作对
+                  if (humanDrivingData.sampleCount % 5 === 0) {
+                      humanDrivingData.samples.push({
+                          // 状态
+                          angleToTarget: angleToTarget,  // 目标点角度（人类追着绿球开）
+                          cte: cte,                      // 横向偏差
+                          speed: speed,                  // 当前速度
+                          // 动作
+                          steer: steer,                  // 人类的转向角
+                          acceleration: acceleration    // 人类的加速度
+                      });
+                  }
+
+                  // 实时显示（每120帧）
+                  if (humanDrivingData.sampleCount % 120 === 0) {
+                      const avgCTE = humanDrivingData.totalCTE / humanDrivingData.sampleCount;
+                      console.log(`📊 记录中: 样本=${humanDrivingData.samples.length}, 距离=${humanDrivingData.totalDistance.toFixed(0)}m, 平均CTE=${avgCTE.toFixed(2)}m`);
+                  }
+              }
+          }
+
+          visualChassis.position.copy(chassisBody.position);
+          visualChassis.quaternion.copy(chassisBody.quaternion);
+          
+          for (let i = 0; i < vehicle.wheelInfos.length; i++) {
+              vehicle.updateWheelTransform(i);
+              const t = vehicle.wheelInfos[i].worldTransform;
+              visualWheels[i].position.copy(t.position);
+              visualWheels[i].quaternion.copy(t.quaternion);
+          }
+
+
+          // 定义两种视角的参数
+          const tpSeatOffset = new THREE.Vector3(0, 5, 10);      // 第三人称：高处往后
+          const fpSeatOffset = new THREE.Vector3(-0.4, 1.5, -1);  // 第一人称：驾驶员头部位置
+
+          const tpLookOffset = new THREE.Vector3(0, 0, -5);      // 第三人称：看车头前方
+          const fpLookOffset = new THREE.Vector3(-0.4, -1.5, -10); // 第一人称：平视远方
+
+          // 根据当前视角选择参数
+          const currentSeat = isFirstPerson ? fpSeatOffset : tpSeatOffset;
+          const currentLook = isFirstPerson ? fpLookOffset : tpLookOffset;
+
+          // 计算相机在世界空间的位置
+          // .clone() 很重要，防止修改原始向量
+          const camPos = currentSeat.clone().applyMatrix4(visualChassis.matrixWorld);
+
+          // 平滑跟随
+          // 第一人称需要 lerp 极高（0.9）甚至直接 copy，否则会有延迟感导致晕车
+          // 第三人称可以 lerp 低一点（0.1）增加动感
+          camera.position.lerp(camPos, isFirstPerson ? 0.95 : 0.1);
+
+          // 计算相机看向的目标点
+          const lookTarget = currentLook.clone().applyMatrix4(visualChassis.matrixWorld);
+          camera.lookAt(lookTarget);
+          // const seatOffset = new THREE.Vector3(0.4, 4, 8); 
+          // const camPos = seatOffset.applyMatrix4(visualChassis.matrixWorld);
+          // camera.position.lerp(camPos, 0.3);
+
+          // const lookOffset = new THREE.Vector3(0.35, -0.1, -1); 
+          // const lookTarget = lookOffset.applyMatrix4(visualChassis.matrixWorld);
+          // camera.lookAt(lookTarget);
+
+          const mPos = new THREE.Vector3(-1.2, 0.5, 0.5).applyMatrix4(visualChassis.matrixWorld);
+          mirrorCamera.position.copy(mPos);
+          const mLook = new THREE.Vector3(-5, -0.5, 15).applyMatrix4(visualChassis.matrixWorld);
+          mirrorCamera.lookAt(mLook);
+
+          mirrorRenderer.render(scene, mirrorCamera);
+
+          if (chassisBody.position.y < prevY - 30) {
+              console.warn(`[Reset] 触发复位! 车Y=${chassisBody.position.y.toFixed(1)}, prevY=${prevY.toFixed(1)}, 差值=${(chassisBody.position.y - prevY).toFixed(1)}`);
+              resetCar();
+          }
+          if (Date.now() % 60 === 0 && chassisBody.position.y > -1) {
+              lastSafePosition.copy(chassisBody.position);
+              lastSafeQuaternion.copy(chassisBody.quaternion);
+          }
+
+          if (masterGain && windFilter) {
+              const speed = chassisBody.velocity.length(); 
+              const now = audioCtx.currentTime;
+
+              // 依然是速度超过 15 (约 50km/h) 启动
+              if (speed < 15) {
+                  masterGain.gain.setTargetAtTime(0, now, 0.1);
+              } else {
+                  // 1. 音量：随速度快速增强
+                  const targetGain = Math.min(Math.pow((speed - 15) / 40, 1.5), 1.2); 
+                  masterGain.gain.setTargetAtTime(targetGain, now, 0.3);
+
+                  // 2. 频率：关键！保持在低频区间 (80Hz - 400Hz)
+                  // 只有在低频徘徊，才会有“隆隆”的重感
+                  const targetFreq = 80 + (speed * 4); 
+                  windFilter.frequency.setTargetAtTime(Math.min(targetFreq, 450), now, 0.3);
+                  
+                  // 3. 动态Q值：越快，震动感越强
+                  windFilter.Q.setTargetAtTime(1.0 + (speed / 30), now, 0.3);
+              }
+          }
+
+          if (traffic) {
+              traffic.update();
+              // 每3秒打印一次交通状态
+              if (Date.now() % 3000 < 20) {
+                  console.log(`[Traffic] 车辆数:${traffic.vehicles.length}, 限制:${traffic.limit}, spawnTimer:${traffic.spawnTimer}, playerZ:${chassisBody.position.z.toFixed(0)}`);
+              }
+          }
         }
-        // ------------------------------
-
-        visualChassis.position.copy(chassisBody.position);
-        visualChassis.quaternion.copy(chassisBody.quaternion);
-        
-        for (let i = 0; i < vehicle.wheelInfos.length; i++) {
-            vehicle.updateWheelTransform(i);
-            const t = vehicle.wheelInfos[i].worldTransform;
-            visualWheels[i].position.copy(t.position);
-            visualWheels[i].quaternion.copy(t.quaternion);
-        }
-
-
-        // 定义两种视角的参数
-        const tpSeatOffset = new THREE.Vector3(0, 5, 10);      // 第三人称：高处往后
-        const fpSeatOffset = new THREE.Vector3(-0.4, 1.5, -1);  // 第一人称：驾驶员头部位置
-
-        const tpLookOffset = new THREE.Vector3(0, 0, -5);      // 第三人称：看车头前方
-        const fpLookOffset = new THREE.Vector3(-0.4, -1.5, -10); // 第一人称：平视远方
-
-        // 根据当前视角选择参数
-        const currentSeat = isFirstPerson ? fpSeatOffset : tpSeatOffset;
-        const currentLook = isFirstPerson ? fpLookOffset : tpLookOffset;
-
-        // 计算相机在世界空间的位置
-        // .clone() 很重要，防止修改原始向量
-        const camPos = currentSeat.clone().applyMatrix4(visualChassis.matrixWorld);
-
-        // 平滑跟随
-        // 第一人称需要 lerp 极高（0.9）甚至直接 copy，否则会有延迟感导致晕车
-        // 第三人称可以 lerp 低一点（0.1）增加动感
-        camera.position.lerp(camPos, isFirstPerson ? 0.95 : 0.1);
-
-        // 计算相机看向的目标点
-        const lookTarget = currentLook.clone().applyMatrix4(visualChassis.matrixWorld);
-        camera.lookAt(lookTarget);
-        // const seatOffset = new THREE.Vector3(0.4, 4, 8); 
-        // const camPos = seatOffset.applyMatrix4(visualChassis.matrixWorld);
-        // camera.position.lerp(camPos, 0.3);
-
-        // const lookOffset = new THREE.Vector3(0.35, -0.1, -1); 
-        // const lookTarget = lookOffset.applyMatrix4(visualChassis.matrixWorld);
-        // camera.lookAt(lookTarget);
-
-        const mPos = new THREE.Vector3(-1.2, 0.5, 0.5).applyMatrix4(visualChassis.matrixWorld);
-        mirrorCamera.position.copy(mPos);
-        const mLook = new THREE.Vector3(-5, -0.5, 15).applyMatrix4(visualChassis.matrixWorld);
-        mirrorCamera.lookAt(mLook);
-
         renderer.render(scene, camera);
-        mirrorRenderer.render(scene, mirrorCamera);
-
-        if (chassisBody.position.y < prevY - 30) {
-            resetCar();
-        }
-        if (Date.now() % 60 === 0 && chassisBody.position.y > -1) {
-            lastSafePosition.copy(chassisBody.position);
-            lastSafeQuaternion.copy(chassisBody.quaternion);
-        }
-
-        if (masterGain && windFilter) {
-            const speed = chassisBody.velocity.length(); 
-            const now = audioCtx.currentTime;
-
-            // 依然是速度超过 15 (约 50km/h) 启动
-            if (speed < 15) {
-                masterGain.gain.setTargetAtTime(0, now, 0.1);
-            } else {
-                // 1. 音量：随速度快速增强
-                const targetGain = Math.min(Math.pow((speed - 15) / 40, 1.5), 1.2); 
-                masterGain.gain.setTargetAtTime(targetGain, now, 0.3);
-
-                // 2. 频率：关键！保持在低频区间 (80Hz - 400Hz)
-                // 只有在低频徘徊，才会有“隆隆”的重感
-                const targetFreq = 80 + (speed * 4); 
-                windFilter.frequency.setTargetAtTime(Math.min(targetFreq, 450), now, 0.3);
-                
-                // 3. 动态Q值：越快，震动感越强
-                windFilter.Q.setTargetAtTime(1.0 + (speed / 30), now, 0.3);
-            }
-        }
     }
 
     window.addEventListener('resize', () => {
