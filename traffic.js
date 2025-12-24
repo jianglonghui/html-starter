@@ -2,20 +2,14 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 
 /**
- * 道路坐标核心算法
- * 注意：此公式必须与主文件 generateNextSegment 保持绝对一致
+ * 道路坐标核心算法 - 使用全局场景的计算函数
  */
 export function calculateRoadPoint(z) {
-    const i = Math.abs(z) / 15; // segLen = 15
-    let x = 0, y = 0;
-    if (i >= 5) {
-        const t = i - 5;
-        // S弯组合
-        x = Math.sin(t * 0.2) * 35 + Math.sin(t * 0.05) * 60;
-        // 坡度起伏
-        y = Math.sin(t * 0.08) * 25;
+    if (window.calculateRoadPoint && window.calculateRoadPoint !== calculateRoadPoint) {
+        return window.calculateRoadPoint(z);
     }
-    return new THREE.Vector3(x, y, z);
+    // 后备：简单直线
+    return new THREE.Vector3(0, 0, z);
 }
 
 export class NPCVehicle {
@@ -100,13 +94,166 @@ export class NPCVehicle {
 
         // --- 3. 视觉展示 ---
         this.mesh = new THREE.Group();
-        const bodyColor = new THREE.Color().setHSL(Math.random(), 0.7, 0.4);
-        const bodyMesh = new THREE.Mesh(
-            new THREE.BoxGeometry(2, 0.8, 4.4),
-            new THREE.MeshStandardMaterial({ color: bodyColor, metalness: 0.5, roughness: 0.5 })
-        );
-        bodyMesh.position.y = 0.5;
-        this.mesh.add(bodyMesh);
+
+        // 随机车辆类型: 0=轿车, 1=皮卡, 2=货车
+        this.vehicleType = Math.floor(Math.random() * 3);
+
+        // 随机车身颜色
+        const bodyColor = new THREE.Color().setHSL(Math.random(), 0.7, 0.45);
+        const bodyMat = new THREE.MeshStandardMaterial({ color: bodyColor, metalness: 0.6, roughness: 0.4 });
+        const blackMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.3, roughness: 0.6 });
+        const glassMat = new THREE.MeshStandardMaterial({ color: 0x88aacc, metalness: 0.9, roughness: 0.1, transparent: true, opacity: 0.6 });
+        const chromeMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.9, roughness: 0.1 });
+
+        if (this.vehicleType === 0) {
+            // === 轿车 ===
+            // 车身底部
+            const body = new THREE.Mesh(new THREE.BoxGeometry(2, 0.5, 4.4), bodyMat);
+            body.position.y = 0.3;
+            body.castShadow = true;
+            this.mesh.add(body);
+
+            // 车顶
+            const roof = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.45, 2.2), bodyMat);
+            roof.position.set(0, 0.75, 0.3);
+            this.mesh.add(roof);
+
+            // 前挡风玻璃
+            const frontGlass = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.4, 0.6), glassMat);
+            frontGlass.position.set(0, 0.65, -0.6);
+            frontGlass.rotation.x = -0.4;
+            this.mesh.add(frontGlass);
+
+            // 后挡风玻璃
+            const rearGlass = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.35, 0.5), glassMat);
+            rearGlass.position.set(0, 0.65, 1.5);
+            rearGlass.rotation.x = 0.3;
+            this.mesh.add(rearGlass);
+
+            // 车灯
+            const lightMat = new THREE.MeshStandardMaterial({ color: 0xffffee, emissive: 0xffffee, emissiveIntensity: 0.5 });
+            const headlight = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.15, 0.1), lightMat);
+            headlight.position.set(-0.6, 0.35, -2.2);
+            this.mesh.add(headlight);
+            const headlight2 = headlight.clone();
+            headlight2.position.set(0.6, 0.35, -2.2);
+            this.mesh.add(headlight2);
+
+            // 尾灯
+            const tailMat = new THREE.MeshStandardMaterial({ color: 0xff0000, emissive: 0xff0000, emissiveIntensity: 0.5 });
+            const taillight = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.15, 0.1), tailMat);
+            taillight.position.set(-0.7, 0.35, 2.2);
+            this.mesh.add(taillight);
+            const taillight2 = taillight.clone();
+            taillight2.position.set(0.7, 0.35, 2.2);
+            this.mesh.add(taillight2);
+
+        } else if (this.vehicleType === 1) {
+            // === 皮卡 ===
+            // 车头部分
+            const frontBody = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.6, 2.2), bodyMat);
+            frontBody.position.set(0, 0.35, -1.1);
+            frontBody.castShadow = true;
+            this.mesh.add(frontBody);
+
+            // 驾驶舱
+            const cabin = new THREE.Mesh(new THREE.BoxGeometry(2, 0.7, 1.6), bodyMat);
+            cabin.position.set(0, 0.85, -0.2);
+            this.mesh.add(cabin);
+
+            // 驾驶舱玻璃
+            const cabinGlass = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.5, 1.4), glassMat);
+            cabinGlass.position.set(0, 1.0, -0.2);
+            this.mesh.add(cabinGlass);
+
+            // 前挡风
+            const windshield = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.45, 0.4), glassMat);
+            windshield.position.set(0, 0.9, -0.9);
+            windshield.rotation.x = -0.3;
+            this.mesh.add(windshield);
+
+            // 货斗
+            const bedFloor = new THREE.Mesh(new THREE.BoxGeometry(2, 0.15, 2.4), bodyMat);
+            bedFloor.position.set(0, 0.4, 1.3);
+            this.mesh.add(bedFloor);
+
+            // 货斗围栏
+            const bedSideL = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.5, 2.4), bodyMat);
+            bedSideL.position.set(-0.95, 0.65, 1.3);
+            this.mesh.add(bedSideL);
+            const bedSideR = bedSideL.clone();
+            bedSideR.position.set(0.95, 0.65, 1.3);
+            this.mesh.add(bedSideR);
+            const bedBack = new THREE.Mesh(new THREE.BoxGeometry(2, 0.5, 0.1), bodyMat);
+            bedBack.position.set(0, 0.65, 2.45);
+            this.mesh.add(bedBack);
+
+            // 车灯
+            const lightMat = new THREE.MeshStandardMaterial({ color: 0xffffee, emissive: 0xffffee, emissiveIntensity: 0.5 });
+            const headlight = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.2, 0.1), lightMat);
+            headlight.position.set(-0.65, 0.4, -2.2);
+            this.mesh.add(headlight);
+            const headlight2 = headlight.clone();
+            headlight2.position.set(0.65, 0.4, -2.2);
+            this.mesh.add(headlight2);
+
+            // 保险杠
+            const bumper = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.2, 0.15), chromeMat);
+            bumper.position.set(0, 0.2, -2.25);
+            this.mesh.add(bumper);
+
+        } else {
+            // === 货车 ===
+            // 车头
+            const truckHead = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.9, 1.8), bodyMat);
+            truckHead.position.set(0, 0.5, -1.3);
+            truckHead.castShadow = true;
+            this.mesh.add(truckHead);
+
+            // 驾驶舱玻璃
+            const cabinGlass = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.5, 0.6), glassMat);
+            cabinGlass.position.set(0, 0.95, -1.6);
+            cabinGlass.rotation.x = -0.2;
+            this.mesh.add(cabinGlass);
+
+            // 货箱
+            const cargoColor = Math.random() > 0.5 ? 0xeeeeee : 0x4477aa;
+            const cargoMat = new THREE.MeshStandardMaterial({ color: cargoColor, metalness: 0.2, roughness: 0.7 });
+            const cargo = new THREE.Mesh(new THREE.BoxGeometry(2.3, 1.8, 3.2), cargoMat);
+            cargo.position.set(0, 1.0, 0.9);
+            cargo.castShadow = true;
+            this.mesh.add(cargo);
+
+            // 货箱加强筋
+            const ribMat = new THREE.MeshStandardMaterial({ color: 0x666666 });
+            for (let i = 0; i < 3; i++) {
+                const rib = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.6, 0.08), ribMat);
+                rib.position.set(-1.18, 1.0, -0.3 + i * 1.1);
+                this.mesh.add(rib);
+                const rib2 = rib.clone();
+                rib2.position.set(1.18, 1.0, -0.3 + i * 1.1);
+                this.mesh.add(rib2);
+            }
+
+            // 车灯
+            const lightMat = new THREE.MeshStandardMaterial({ color: 0xffffee, emissive: 0xffffee, emissiveIntensity: 0.5 });
+            const headlight = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.25, 0.1), lightMat);
+            headlight.position.set(-0.7, 0.35, -2.2);
+            this.mesh.add(headlight);
+            const headlight2 = headlight.clone();
+            headlight2.position.set(0.7, 0.35, -2.2);
+            this.mesh.add(headlight2);
+
+            // 尾灯
+            const tailMat = new THREE.MeshStandardMaterial({ color: 0xff0000, emissive: 0xff3300, emissiveIntensity: 0.5 });
+            const taillight = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.3, 0.1), tailMat);
+            taillight.position.set(-1.0, 0.5, 2.5);
+            this.mesh.add(taillight);
+            const taillight2 = taillight.clone();
+            taillight2.position.set(1.0, 0.5, 2.5);
+            this.mesh.add(taillight2);
+        }
+
         this.scene.add(this.mesh);
 
         this.visualWheels = [];

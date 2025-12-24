@@ -52,7 +52,7 @@
 <div id="info">
     ⛰️ 秋名山特训 (无限生成版)<br>
     W 加速 | S 刹车/倒车 | A/D 转向 | Space 手刹<br>
-    M 开关音乐 | V 切换视角 | R 重置<br>
+    M 开关音乐 | V 切换视角 | R 重置 | N 切换场景<br>
     C 采集模式 | L 学习 | T 训练
 </div>
 <div id="cockpit-overlay"></div>
@@ -63,9 +63,10 @@
     import * as CANNON from 'cannon-es';
     import { Sky } from 'https://unpkg.com/three@0.160.0/examples/jsm/objects/Sky.js';
     import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js';
-    import { TrafficManager, NPCVehicle, calculateRoadPoint} from './traffic.js';
+    import { TrafficManager, NPCVehicle } from './traffic.js';
     import {AutoTuner} from './AutoTuner.js';
     import { trainedData } from './trained_data.js';
+    import { MountainRoad, SeaHighway, SceneList } from './scenes/index.js';
 
     let orbitControls;
 
@@ -78,6 +79,7 @@
     let bgMusic;
     let isMusicPlaying = false;
     let traffic;
+    let roadMat, wallMat;
 
     let audioCtx;
     let windNoise;
@@ -93,14 +95,80 @@
     ];
     let lastSafePosition = new CANNON.Vec3(0, 2, 0);
     let lastSafeQuaternion = new CANNON.Quaternion();
-    
-    // --- 无限路段管理变量 ---
-    const roadSegments = []; // 存储路段对象，用于后续删除
-    let segmentCounter = 0;  // 当前生成的段数
-    let prevX = 0, prevY = 0, prevZ = 0; // 上一段路末端坐标
-    const segLen = 15;        // 每段长度
-    const roadWidth = 14;     // 路宽
-    let roadMat, wallMat, roadTex; 
+
+    // --- 场景管理 ---
+    let currentScene = null;
+    let currentSceneIndex = 0;
+    const segLen = 15;        // 每段长度（供其他模块使用）
+
+    // 全局 calculateRoadPoint 供 traffic.js 使用
+    window.calculateRoadPoint = function(z) {
+        if (currentScene) {
+            return currentScene.calculateRoadPoint(z);
+        }
+        return new THREE.Vector3(0, 0, z);
+    };
+
+    // 初始化场景
+    function initScene(index) {
+        const SceneClasses = [MountainRoad, SeaHighway];
+        const SceneClass = SceneClasses[index % SceneClasses.length];
+        currentScene = new SceneClass(world, scene, roadMat, wallMat);
+        currentSceneIndex = index;
+
+        // 生成初始路段
+        for (let i = 0; i < 30; i++) {
+            currentScene.generateNextSegment();
+        }
+
+        console.log(`%c 🗺️ 场景: ${currentScene.getName()}`, 'background: #333; color: #fff; font-size: 14px;');
+    }
+
+    // 切换场景
+    function switchScene() {
+        // 清理旧场景
+        if (currentScene) {
+            currentScene.roadSegments.forEach(seg => {
+                seg.bodies.forEach(b => world.removeBody(b));
+                seg.meshes.forEach(m => {
+                    scene.remove(m);
+                    if (m.geometry) m.geometry.dispose();
+                    if (m.material) {
+                        if (Array.isArray(m.material)) {
+                            m.material.forEach(mat => mat.dispose());
+                        } else {
+                            m.material.dispose();
+                        }
+                    }
+                });
+            });
+            // 清理水面等额外元素
+            if (currentScene.waterMeshes) {
+                currentScene.waterMeshes.forEach(w => {
+                    scene.remove(w);
+                    w.geometry.dispose();
+                    w.material.dispose();
+                });
+            }
+        }
+
+        // 重置车辆位置
+        chassisBody.position.set(0, 2, -5);
+        chassisBody.velocity.set(0, 0, 0);
+        chassisBody.angularVelocity.set(0, 0, 0);
+        chassisBody.quaternion.set(0, 0, 0, 1);
+
+        // 创建新场景
+        currentSceneIndex = (currentSceneIndex + 1) % 2;
+        initScene(currentSceneIndex);
+
+        // 重置交通
+        if (traffic) {
+            traffic.vehicles.forEach(v => v.destroy());
+            traffic.vehicles = [];
+            traffic.generateWaypoints(chassisBody.position.z);
+        }
+    }
     // -----------------------
 
     
@@ -440,18 +508,8 @@
         mirrorRenderer.setSize(mDiv.clientWidth, mDiv.clientHeight);
         mDiv.appendChild(mirrorRenderer.domElement);
 
-        // 准备路面纹理
-        const canvas = document.createElement('canvas'); canvas.width=128; canvas.height=128;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle='#666'; ctx.fillRect(0,0,128,128);
-        ctx.fillStyle='#fff'; ctx.fillRect(60,0,8,40); ctx.fillRect(60,64,8,40);
-        roadTex = new THREE.CanvasTexture(canvas);
-        roadTex.wrapS = THREE.RepeatWrapping; roadTex.wrapT = THREE.RepeatWrapping;
-
-        // 初始化生成前30段路
-        for(let i=0; i<30; i++) {
-            generateNextSegment();
-        }
+        // 初始化场景系统
+        initScene(currentSceneIndex);
 
         // 车辆配置
         const chassisShape = new CANNON.Box(new CANNON.Vec3(1, 0.2, 2.2));
@@ -460,42 +518,178 @@
         chassisBody.position.set(0, 2, -5);
         chassisBody.angularDamping = 0.5;
 
-        // 视觉车身组
+        // 视觉车身组 - 跑车造型
         visualChassis = new THREE.Group();
-        
-        // 1. 底盘/主体 (红色)
-        const bodyMesh = new THREE.Mesh(
-            new THREE.BoxGeometry(2, 0.6, 4.4),
-            new THREE.MeshStandardMaterial({ color: 0xcc0000, metalness: 0.8, roughness: 0.2 })
-        );
-        bodyMesh.position.y = 0.3;
-        bodyMesh.castShadow = true;
-        visualChassis.add(bodyMesh);
 
-        // 2. 驾驶舱 (黑色玻璃感)
-        const cabin = new THREE.Mesh(
-            new THREE.BoxGeometry(1.5, 0.6, 1.8),
-            new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 1, roughness: 0.1 })
-        );
-        cabin.position.set(0, 0.8, 0.4); // 位于车身后半部分
-        visualChassis.add(cabin);
+        // 车身材质 - 金属橙色
+        const bodyMat = new THREE.MeshStandardMaterial({
+            color: 0xff6600,
+            metalness: 0.9,
+            roughness: 0.15
+        });
+        const blackMat = new THREE.MeshStandardMaterial({
+            color: 0x111111,
+            metalness: 0.8,
+            roughness: 0.2
+        });
+        const glassMat = new THREE.MeshStandardMaterial({
+            color: 0x88ccff,
+            metalness: 1,
+            roughness: 0.05,
+            transparent: true,
+            opacity: 0.7
+        });
 
-        // 3. 车头大灯
-        const lightGeo = new THREE.BoxGeometry(0.4, 0.2, 0.1);
-        const lightMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff });
+        // 1. 主车身底部 - 流线型
+        const bodyLower = new THREE.Mesh(
+            new THREE.BoxGeometry(2, 0.35, 4.6),
+            bodyMat
+        );
+        bodyLower.position.y = 0.18;
+        bodyLower.castShadow = true;
+        visualChassis.add(bodyLower);
+
+        // 2. 车头 - 倾斜造型
+        const hoodGeo = new THREE.BufferGeometry();
+        const hoodVerts = new Float32Array([
+            // 前脸（低）
+            -0.95, 0.25, -2.3,   0.95, 0.25, -2.3,   0, 0.35, -2.3,
+            // 引擎盖顶（高）
+            -0.95, 0.55, -0.8,   0.95, 0.55, -0.8,
+            // 左侧面
+            -0.95, 0.25, -2.3,   -0.95, 0.55, -0.8,   -1, 0.35, -0.8,   -1, 0.25, -2.3,
+            // 右侧面
+            0.95, 0.25, -2.3,   0.95, 0.55, -0.8,   1, 0.35, -0.8,   1, 0.25, -2.3,
+        ]);
+        const hood = new THREE.Mesh(
+            new THREE.BoxGeometry(2, 0.4, 1.6),
+            bodyMat
+        );
+        hood.position.set(0, 0.5, -1.4);
+        hood.rotation.x = -0.15;
+        hood.castShadow = true;
+        visualChassis.add(hood);
+
+        // 3. 驾驶舱 - 战斗机座舱风格
+        const cabinBase = new THREE.Mesh(
+            new THREE.BoxGeometry(1.8, 0.3, 2.2),
+            bodyMat
+        );
+        cabinBase.position.set(0, 0.5, 0.5);
+        visualChassis.add(cabinBase);
+
+        // 挡风玻璃 - 倾斜
+        const windshield = new THREE.Mesh(
+            new THREE.BoxGeometry(1.6, 0.5, 0.8),
+            glassMat
+        );
+        windshield.position.set(0, 0.75, -0.3);
+        windshield.rotation.x = -0.5;
+        visualChassis.add(windshield);
+
+        // 车顶玻璃
+        const roofGlass = new THREE.Mesh(
+            new THREE.BoxGeometry(1.5, 0.1, 1.2),
+            glassMat
+        );
+        roofGlass.position.set(0, 0.9, 0.6);
+        visualChassis.add(roofGlass);
+
+        // 后窗
+        const rearWindow = new THREE.Mesh(
+            new THREE.BoxGeometry(1.4, 0.4, 0.5),
+            glassMat
+        );
+        rearWindow.position.set(0, 0.7, 1.4);
+        rearWindow.rotation.x = 0.4;
+        visualChassis.add(rearWindow);
+
+        // 4. 车尾 - 扩散器风格
+        const rear = new THREE.Mesh(
+            new THREE.BoxGeometry(2, 0.5, 0.8),
+            bodyMat
+        );
+        rear.position.set(0, 0.4, 1.9);
+        rear.castShadow = true;
+        visualChassis.add(rear);
+
+        // 5. 尾翼
+        const spoilerBase = new THREE.Mesh(
+            new THREE.BoxGeometry(0.1, 0.4, 0.1),
+            blackMat
+        );
+        spoilerBase.position.set(-0.7, 0.7, 2.1);
+        visualChassis.add(spoilerBase);
+        const spoilerBase2 = spoilerBase.clone();
+        spoilerBase2.position.set(0.7, 0.7, 2.1);
+        visualChassis.add(spoilerBase2);
+
+        const spoilerWing = new THREE.Mesh(
+            new THREE.BoxGeometry(1.8, 0.08, 0.35),
+            blackMat
+        );
+        spoilerWing.position.set(0, 0.95, 2.15);
+        spoilerWing.rotation.x = -0.1;
+        visualChassis.add(spoilerWing);
+
+        // 6. 侧裙
+        const sideskirtL = new THREE.Mesh(
+            new THREE.BoxGeometry(0.1, 0.2, 3.5),
+            blackMat
+        );
+        sideskirtL.position.set(-1.0, 0.1, 0);
+        visualChassis.add(sideskirtL);
+        const sideskirtR = sideskirtL.clone();
+        sideskirtR.position.set(1.0, 0.1, 0);
+        visualChassis.add(sideskirtR);
+
+        // 7. 车头大灯 - LED风格
+        const lightGeo = new THREE.BoxGeometry(0.5, 0.1, 0.15);
+        const lightMat = new THREE.MeshStandardMaterial({
+            color: 0xffffff,
+            emissive: 0xffffff,
+            emissiveIntensity: 1
+        });
         const leftLight = new THREE.Mesh(lightGeo, lightMat);
-        leftLight.position.set(-0.7, 0.3, -2.2);
+        leftLight.position.set(-0.6, 0.35, -2.35);
         const rightLight = leftLight.clone();
-        rightLight.position.set(0.7, 0.3, -2.2);
+        rightLight.position.set(0.6, 0.35, -2.35);
         visualChassis.add(leftLight, rightLight);
 
-        // 4. 车尾灯 (红色)
-        const tailLightMat = new THREE.MeshStandardMaterial({ color: 0xff0000, emissive: 0x880000 });
-        const leftTail = new THREE.Mesh(lightGeo, tailLightMat);
-        leftTail.position.set(-0.7, 0.4, 2.2);
-        const rightTail = leftTail.clone();
-        rightTail.position.set(0.7, 0.4, 2.2);
-        visualChassis.add(leftTail, rightTail);
+        // 日行灯条
+        const drlGeo = new THREE.BoxGeometry(0.35, 0.03, 0.1);
+        const drlMat = new THREE.MeshStandardMaterial({
+            color: 0x00ffff,
+            emissive: 0x00ffff,
+            emissiveIntensity: 0.8
+        });
+        const drlL = new THREE.Mesh(drlGeo, drlMat);
+        drlL.position.set(-0.6, 0.28, -2.35);
+        const drlR = drlL.clone();
+        drlR.position.set(0.6, 0.28, -2.35);
+        visualChassis.add(drlL, drlR);
+
+        // 8. 尾灯 - 贯穿式
+        const tailLightMat = new THREE.MeshStandardMaterial({
+            color: 0xff0000,
+            emissive: 0xff0000,
+            emissiveIntensity: 0.8
+        });
+        const tailLight = new THREE.Mesh(
+            new THREE.BoxGeometry(1.8, 0.08, 0.1),
+            tailLightMat
+        );
+        tailLight.position.set(0, 0.55, 2.35);
+        visualChassis.add(tailLight);
+
+        // 9. 进气口装饰
+        const intakeGeo = new THREE.BoxGeometry(0.3, 0.15, 0.05);
+        const intakeMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
+        const intakeL = new THREE.Mesh(intakeGeo, intakeMat);
+        intakeL.position.set(-0.5, 0.2, -2.32);
+        const intakeR = intakeL.clone();
+        intakeR.position.set(0.5, 0.2, -2.32);
+        visualChassis.add(intakeL, intakeR);
 
         scene.add(visualChassis);
 
@@ -583,136 +777,6 @@
         document.getElementById('cockpit-overlay').style.display = isFirstPerson ? 'block' : 'none';
     }
 
-    // ================== 核心修改：单段生成逻辑 ==================
-    function generateNextSegment() {
-        const i = segmentCounter;
-        
-        // --- 1. 路径算法 (S弯 + 上下坡) ---
-        let x = 0;
-        let y = 0;
-        if (i >= 5) { // 前5段保持直线，给玩家反应时间
-            const t = i - 5;
-            // S弯组合：0.2决定频率(越快弯越急)，35决定幅度
-            x = Math.sin(t * 0.2) * 35 + Math.sin(t * 0.05) * 60;
-            // 坡度组合：0.08决定起伏频率，25决定山丘高度
-            y = Math.sin(t * 0.08) * 25; 
-        }
-        const z = -i * segLen;
-
-        const segmentData = { bodies: [], meshes: [] };
-
-        if (i > 0) {
-            // 计算当前段相对于上一段的位移
-            const dx = x - prevX;
-            const dy = y - prevY;
-            const dz = z - prevZ;
-            const horizontalLen = Math.sqrt(dx * dx + dz * dz);
-            const totalLen = Math.sqrt(dx * dx + dy * dy + dz * dz);
-            
-            // 计算转向角(Yaw)和俯仰角(Pitch)
-            const yaw = Math.atan2(dx, dz); 
-            const pitch = -Math.atan2(dy, horizontalLen); 
-
-            // 创建临时物理向量用于计算，避免 TypeError: vadd is not a function
-            const calcVec = new CANNON.Vec3();
-
-            // --- 2. 物理路面生成 ---
-            const roadBody = new CANNON.Body({ mass: 0, material: roadMat });
-            // 物理盒子稍微加长一点(0.5)防止路段缝隙颠簸
-            roadBody.addShape(new CANNON.Box(new CANNON.Vec3(roadWidth / 2, 1, totalLen / 2 + 0.5)));
-            roadBody.position.set((x + prevX) / 2, (y + prevY) / 2 - 1, (z + prevZ) / 2);
-
-            // 设置旋转：先偏航再俯仰
-            const qYaw = new CANNON.Quaternion();
-            qYaw.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), yaw);
-            const qPitch = new CANNON.Quaternion();
-            qPitch.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), pitch);
-            roadBody.quaternion = qYaw.mult(qPitch);
-
-            world.addBody(roadBody);
-            segmentData.bodies.push(roadBody);
-
-            // --- 3. 视觉路面生成 ---
-            const roadMesh = new THREE.Mesh(
-                new THREE.BoxGeometry(roadWidth, 0.2, totalLen + 1),
-                new THREE.MeshLambertMaterial({ map: roadTex })
-            );
-            // 将视觉模型对齐到物理身体的顶面 (y=1的地方)
-            roadBody.pointToWorldFrame(new CANNON.Vec3(0, 1, 0), calcVec);
-            roadMesh.position.set(calcVec.x, calcVec.y, calcVec.z);
-            roadMesh.quaternion.copy(roadBody.quaternion);
-            roadMesh.receiveShadow = true;
-            scene.add(roadMesh);
-            segmentData.meshes.push(roadMesh);
-
-            // --- 4. 左侧山壁生成 (跟随坡度) ---
-            const wallBody = new CANNON.Body({ mass: 0, material: wallMat });
-            wallBody.addShape(new CANNON.Box(new CANNON.Vec3(1, 8, totalLen / 2)));
-            roadBody.pointToWorldFrame(new CANNON.Vec3(-roadWidth / 2 - 1, 5, 0), wallBody.position);
-            wallBody.quaternion.copy(roadBody.quaternion);
-            world.addBody(wallBody);
-            segmentData.bodies.push(wallBody);
-
-            const wallMesh = new THREE.Mesh(
-                new THREE.BoxGeometry(2, 16, totalLen + 2),
-                new THREE.MeshLambertMaterial({ color: 0x4d3c2e })
-            );
-            wallMesh.position.set(wallBody.position.x, wallBody.position.y, wallBody.position.z);
-            wallMesh.quaternion.copy(wallBody.quaternion);
-            scene.add(wallMesh);
-            segmentData.meshes.push(wallMesh);
-
-            // --- 5. 右侧护栏生成 (跟随坡度) ---
-            const rail = new THREE.Mesh(
-                new THREE.BoxGeometry(0.3, 1, totalLen),
-                new THREE.MeshStandardMaterial({ color: 0xeeeeee })
-            );
-            roadBody.pointToWorldFrame(new CANNON.Vec3(roadWidth / 2 - 0.5, 0.6, 0), calcVec);
-            rail.position.set(calcVec.x, calcVec.y, calcVec.z);
-            rail.quaternion.copy(roadBody.quaternion);
-            scene.add(rail);
-            segmentData.meshes.push(rail);
-
-            // --- 6. 装饰：随机乱石 ---
-            if (Math.random() > 0.8) {
-                const rock = new THREE.Mesh(
-                    new THREE.DodecahedronGeometry(1 + Math.random() * 2, 0),
-                    new THREE.MeshLambertMaterial({ color: 0x777777 })
-                );
-                roadBody.pointToWorldFrame(new CANNON.Vec3(-roadWidth / 2 - 3, 1, (Math.random()-0.5)*10), calcVec);
-                rock.position.set(calcVec.x, calcVec.y, calcVec.z);
-                rock.rotation.set(Math.random(), Math.random(), Math.random());
-                scene.add(rock);
-                segmentData.meshes.push(rock);
-            }
-        }
-
-        // 内存清理：保留最近80段，删除过后的路段
-        roadSegments.push(segmentData);
-        if (roadSegments.length > 80) {
-            const oldSeg = roadSegments.shift();
-            oldSeg.bodies.forEach(b => world.removeBody(b));
-            oldSeg.meshes.forEach(m => {
-                scene.remove(m);
-                if(m.geometry) m.geometry.dispose();
-                if(m.material) m.material.dispose();
-            });
-        }
-
-        // 更新上一段的坐标
-        prevX = x; prevY = y; prevZ = z;
-        segmentCounter++;
-    }
-    function createSimpleTree() {
-        const g = new THREE.Group();
-        const t = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 2), new THREE.MeshLambertMaterial({color:0x553311}));
-        t.position.y=1;
-        const l = new THREE.Mesh(new THREE.ConeGeometry(2, 5, 8), new THREE.MeshLambertMaterial({color:0x225511}));
-        l.position.y=4.5;
-        g.add(t); g.add(l);
-        return g;
-    }
-
     function handler(e) {
         const up = (e.type == 'keydown');
         const maxForce = 2500;
@@ -796,6 +860,11 @@
                     } else {
                         window.startTraining(); // 非训练按T开始
                     }
+                }
+                break;
+            case 'n':
+                if (up) {
+                    switchScene();
                 }
                 break;
         }
@@ -964,8 +1033,13 @@
           world.step(1 / 60);
 
           // --- 核心修改：无限生成触发器 ---
-          if (chassisBody.position.z < prevZ + (segLen * 15)) {
-              generateNextSegment();
+          if (currentScene && chassisBody.position.z < currentScene.prevZ + (segLen * 15)) {
+              currentScene.generateNextSegment();
+          }
+
+          // --- 波浪动画更新 ---
+          if (currentScene && currentScene.updateWaves) {
+              currentScene.updateWaves(1 / 60);
           }
 
           // --- 记录人类驾驶数据（行为克隆）---
@@ -1086,8 +1160,8 @@
 
           mirrorRenderer.render(scene, mirrorCamera);
 
-          if (chassisBody.position.y < prevY - 30) {
-              console.warn(`[Reset] 触发复位! 车Y=${chassisBody.position.y.toFixed(1)}, prevY=${prevY.toFixed(1)}, 差值=${(chassisBody.position.y - prevY).toFixed(1)}`);
+          if (currentScene && chassisBody.position.y < currentScene.prevY - 30) {
+              console.warn(`[Reset] 触发复位! 车Y=${chassisBody.position.y.toFixed(1)}, prevY=${currentScene.prevY.toFixed(1)}, 差值=${(chassisBody.position.y - currentScene.prevY).toFixed(1)}`);
               resetCar();
           }
           if (Date.now() % 60 === 0 && chassisBody.position.y > -1) {
