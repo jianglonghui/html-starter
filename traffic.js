@@ -37,7 +37,7 @@ export class NPCVehicle {
         // 稳定期计数器（等待物理稳定后再启动驾驶）
         // 训练模式下drive()每帧调用4次，所以需要更大的值
         this.spawnTicks = 0;
-        this.stabilizationPeriod = 240; // 普通模式4秒，训练模式1秒
+        this.stabilizationPeriod = 120; // 普通模式4秒，训练模式1秒
 
         // --- 1. 物理底盘（与主驾车一致）---
         const chassisShape = new CANNON.Box(new CANNON.Vec3(1, 0.2, 2.2));
@@ -46,17 +46,35 @@ export class NPCVehicle {
         this.chassisBody.angularDamping = 0.5;
 
         const data = calculateRoadPoint(startZ);
-        const nextData = calculateRoadPoint(startZ - 2);
+        const nextData = calculateRoadPoint(startZ - 5);
 
-        // 初始化位置与旋转 (稍微抬高防止卡地)
-        this.chassisBody.position.set(data.x + laneOffset, data.y + 4.0, startZ);
-        const yaw = Math.atan2(nextData.x - data.x, -2) + Math.PI;
-        const pitch = -Math.atan2(nextData.y - data.y, 2);
+        // 初始化位置与旋转 (贴近路面生成)
+        this.chassisBody.position.set(data.x + laneOffset, data.y + 0.6, startZ);
+        const yaw = Math.atan2(nextData.x - data.x, -5) + Math.PI;
+        const pitch = -Math.atan2(nextData.y - data.y, 5);
         const qYaw = new CANNON.Quaternion();
         qYaw.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), yaw);
         const qPitch = new CANNON.Quaternion();
         qPitch.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), pitch);
         this.chassisBody.quaternion = qYaw.mult(qPitch);
+
+        // 从训练数据随机获取初始速度
+        let initialSpeed = 8 + Math.random() * 6; // 默认 8-14 m/s
+        const samples = window.humanDrivingSamples;
+        if (samples && samples.length > 0) {
+            const randomSample = samples[Math.floor(Math.random() * samples.length)];
+            initialSpeed = Math.max(5, randomSample.speed); // 至少5m/s
+        }
+
+        // 计算车头朝向的速度向量
+        const forward = new CANNON.Vec3(0, 0, -1); // 本地前方
+        this.chassisBody.quaternion.vmult(forward, forward); // 转到世界坐标
+        this.chassisBody.velocity.set(
+            forward.x * initialSpeed,
+            0,
+            forward.z * initialSpeed
+        );
+        this.chassisBody.angularVelocity.set(0, 0, 0);
 
         this.world.addBody(this.chassisBody);
 
@@ -94,6 +112,7 @@ export class NPCVehicle {
 
         // --- 3. 视觉展示 ---
         this.mesh = new THREE.Group();
+        this.mesh.scale.set(1.3, 1.3, 1.3); // 放大1.3倍
 
         // 随机车辆类型: 0=轿车, 1=皮卡, 2=货车
         this.vehicleType = Math.floor(Math.random() * 3);
@@ -573,7 +592,7 @@ export class TrafficManager {
         this.spawnTimer++;
         if (this.vehicles.length < this.limit && this.spawnTimer > this.spawnInterval) {
             if (Math.random() < 0.05) {
-                const potentialZ = playerZ - 250;
+                const potentialZ = playerZ - 60 - Math.random() * 60; // 60-120米前方
                 const potentialLane = Math.random() > 0.5 ? 3.5 : -3.5;
 
                 const safe = this.isAreaSafe(potentialZ, potentialLane);
