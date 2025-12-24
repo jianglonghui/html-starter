@@ -991,6 +991,10 @@
               const steer = vehicle.wheelInfos[0].steering || 0;
               const targetRoad = calculateRoadPoint(pos.z - SAMPLE_LOOK_AHEAD);
 
+              // 计算坡度 (正=上坡, 负=下坡)
+              const aheadRoad = calculateRoadPoint(pos.z - 5);
+              const pitch = aheadRoad ? Math.atan2(aheadRoad.y - road.y, 5) : 0;
+
               if (targetRoad) {
                   visualChassis.updateMatrixWorld();
                   const invMat = new THREE.Matrix4().copy(visualChassis.matrixWorld).invert();
@@ -1015,9 +1019,10 @@
                   if (humanDrivingData.sampleCount % 5 === 0) {
                       humanDrivingData.samples.push({
                           // 状态
-                          angleToTarget: angleToTarget,  // 目标点角度（人类追着绿球开）
+                          angleToTarget: angleToTarget,  // 目标点角度
                           cte: cte,                      // 横向偏差
                           speed: speed,                  // 当前速度
+                          pitch: pitch,                  // 坡度（正=上坡，负=下坡）
                           // 动作
                           steer: steer,                  // 人类的转向角
                           acceleration: acceleration    // 人类的加速度

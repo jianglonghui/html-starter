@@ -149,15 +149,17 @@ export class NPCVehicle {
      * @param {number} angleToTarget - 当前目标角度
      * @param {number} cte - 当前横向偏差
      * @param {number} speed - 当前速度
+     * @param {number} pitch - 当前坡度
      * @param {Array} samples - 人类驾驶样本
      * @returns {{steer: number, acceleration: number}} 转向角和加速度
      */
-    behaviorClone(angleToTarget, cte, speed, samples) {
-        // 状态向量的权重（angleToTarget最重要）
+    behaviorClone(angleToTarget, cte, speed, pitch, samples) {
+        // 状态向量的权重
         const weights = {
-            angle: 10.0,  // 角度权重最高
+            angle: 10.0,  // 角度权重最高（转向）
             cte: 2.0,     // CTE次之
-            speed: 0.5    // 速度影响较小
+            speed: 0.5,   // 速度影响较小
+            pitch: 8.0    // 坡度权重高（影响油门）
         };
 
         // 找最近的K个邻居
@@ -170,7 +172,8 @@ export class NPCVehicle {
             const dAngle = (angleToTarget - s.angleToTarget) * weights.angle;
             const dCTE = (cte - s.cte) * weights.cte;
             const dSpeed = (speed - s.speed) * weights.speed;
-            const distance = dAngle * dAngle + dCTE * dCTE + dSpeed * dSpeed;
+            const dPitch = ((pitch || 0) - (s.pitch || 0)) * weights.pitch;
+            const distance = dAngle * dAngle + dCTE * dCTE + dSpeed * dSpeed + dPitch * dPitch;
 
             if (neighbors.length < K) {
                 neighbors.push({ distance, steer: s.steer, acceleration: s.acceleration || 0 });
@@ -277,6 +280,10 @@ export class NPCVehicle {
         const road = calculateRoadPoint(pos.z);
         const cte = road ? pos.x - (road.x + this.laneOffset) : 0;
 
+        // 计算当前坡度
+        const aheadRoad = calculateRoadPoint(pos.z - 5);
+        const pitch = (road && aheadRoad) ? Math.atan2(aheadRoad.y - road.y, 5) : 0;
+
         // 3. 转向和加速控制：优先使用行为克隆
         let steer = 0;
         let targetAcceleration = 0;
@@ -284,7 +291,7 @@ export class NPCVehicle {
 
         if (samples && samples.length > 50) {
             // 行为克隆：在人类样本中找最相似的状态，使用人类的操作
-            const cloned = this.behaviorClone(angleToTarget, cte, currentSpeed, samples);
+            const cloned = this.behaviorClone(angleToTarget, cte, currentSpeed, pitch, samples);
             steer = cloned.steer;
             targetAcceleration = cloned.acceleration;
         } else {
