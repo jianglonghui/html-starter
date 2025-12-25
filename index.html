@@ -195,19 +195,166 @@
         .pac-container {
             z-index: 10000 !important;
             border-radius: 8px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
             border: none;
             margin-top: 4px;
         }
+
         .pac-item {
             padding: 8px 12px;
             cursor: pointer;
         }
+
         .pac-item:hover {
             background: #f0f0f0;
         }
+
         .pac-item-query {
             font-size: 14px;
+        }
+
+        /* Start Screen Styles */
+        #start-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-family: 'Inter', sans-serif;
+            backdrop-filter: blur(10px);
+        }
+
+        .start-title {
+            font-size: 3rem;
+            margin-bottom: 2rem;
+            text-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+            letter-spacing: 4px;
+        }
+
+        .mode-buttons {
+            display: flex;
+            gap: 2rem;
+        }
+
+        .mode-btn {
+            padding: 1.5rem 3rem;
+            font-size: 1.5rem;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .mode-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            border-color: white;
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .mode-btn span {
+            font-size: 0.9rem;
+            opacity: 0.7;
+        }
+
+        /* Room Menu Styles */
+        #room-menu {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            gap: 1.5rem;
+            width: 100%;
+            max-width: 500px;
+        }
+
+        .room-list {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 1rem;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .room-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.8rem 1.2rem;
+            background: rgba(255, 255, 255, 0.05);
+            margin-bottom: 0.5rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .room-item:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .room-info {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .room-name {
+            font-weight: bold;
+            font-size: 1.1rem;
+        }
+
+        .room-players {
+            font-size: 0.8rem;
+            opacity: 0.6;
+        }
+
+        .join-btn {
+            padding: 0.5rem 1rem;
+            background: #4CAF50;
+            border: none;
+            border-radius: 4px;
+            color: white;
+            cursor: pointer;
+        }
+
+        .room-actions {
+            display: flex;
+            gap: 1rem;
+            width: 100%;
+        }
+
+        .action-btn {
+            flex: 1;
+            padding: 1rem;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            cursor: pointer;
+            font-size: 1rem;
+        }
+
+        .action-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .back-btn {
+            margin-top: 1rem;
+            opacity: 0.6;
+            cursor: pointer;
+            text-decoration: underline;
         }
     </style>
     <script type="importmap">
@@ -215,10 +362,12 @@
             "imports": {
                 "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
                 "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js",
-                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "playroomkit": "https://esm.sh/playroomkit"
             }
         }
     </script>
+    <!-- Playroom SDK is now in importmap -->
 </head>
 
 <body>
@@ -227,7 +376,7 @@
 
     <!-- Google Maps Places API -->
     <script>
-        (g=>{var h,a,k,p="The Google Maps JavaScript API",c="google",l="importLibrary",q="__ib__",m=document,b=window;b=b[c]||(b[c]={});var d=b.maps||(b.maps={}),r=new Set,e=new URLSearchParams,u=()=>h||(h=new Promise(async(f,n)=>{await (a=m.createElement("script"));e.set("libraries",[...r]);for(k in g)e.set(k.replace(/[A-Z]/g,t=>"_"+t[0].toLowerCase()),g[k]);e.set("callback",c+".maps."+q);a.src=`https://maps.${c}apis.com/maps/api/js?`+e;d[q]=f;a.onerror=()=>h=n(Error(p+" could not load."));a.nonce=m.querySelector("script[nonce]")?.nonce||"";m.head.append(a)}));d[l]?console.warn(p+" only loads once. Ignoring:",g):d[l]=(f,...n)=>r.add(f)&&u().then(()=>d[l](f,...n))})({
+        (g => { var h, a, k, p = "The Google Maps JavaScript API", c = "google", l = "importLibrary", q = "__ib__", m = document, b = window; b = b[c] || (b[c] = {}); var d = b.maps || (b.maps = {}), r = new Set, e = new URLSearchParams, u = () => h || (h = new Promise(async (f, n) => { await (a = m.createElement("script")); e.set("libraries", [...r]); for (k in g) e.set(k.replace(/[A-Z]/g, t => "_" + t[0].toLowerCase()), g[k]); e.set("callback", c + ".maps." + q); a.src = `https://maps.${c}apis.com/maps/api/js?` + e; d[q] = f; a.onerror = () => h = n(Error(p + " could not load.")); a.nonce = m.querySelector("script[nonce]")?.nonce || ""; m.head.append(a) })); d[l] ? console.warn(p + " only loads once. Ignoring:", g) : d[l] = (f, ...n) => r.add(f) && u().then(() => d[l](f, ...n)) })({
             key: window.CONFIG?.GOOGLE_API_KEY || '',
             v: "beta"
         });
@@ -235,20 +384,57 @@
 
 
 
+    <div id="start-screen">
+        <h1 class="start-title">硬核山路驾驶</h1>
+        <div id="mode-selection" class="mode-buttons">
+            <button id="btn-single" class="mode-btn">
+                🕹️ 单机模式
+                <span>独自磨练车技</span>
+            </button>
+            <button id="btn-multi" class="mode-btn">
+                🌐 联机模式
+                <span>创建或加入房间</span>
+            </button>
+        </div>
+
+        <div id="room-menu">
+            <h2>房间列表</h2>
+            <div class="room-list" id="room-list-container">
+                <!-- Mock Rooms -->
+                <div class="room-item" onclick="joinRoom('AKINA-01')">
+                    <div class="room-info">
+                        <span class="room-name">秋名山飙车群</span>
+                        <span class="room-players">3/5 正在驾驶</span>
+                    </div>
+                    <button class="join-btn">加入</button>
+                </div>
+                <div class="room-item" onclick="joinRoom('DRIFT-KING')">
+                    <div class="room-info">
+                        <span class="room-name">漂移之王挑战赛</span>
+                        <span class="room-players">1/5 等待中</span>
+                    </div>
+                    <button class="join-btn">加入</button>
+                </div>
+            </div>
+            <div class="room-actions">
+                <button class="action-btn" onclick="createRoom()">➕ 创建新房间</button>
+                <button class="action-btn" onclick="joinByCode()">🔑 输入代码加入</button>
+            </div>
+            <span class="back-btn" onclick="showModeSelection()">返回模式选择</span>
+        </div>
+    </div>
+
     <div id="info">
         ⛰️ 秋名山特训 (无限生成版)<br>
-        W 加速 | S 刹车 | A/D 转向 | Space 手刹
+        W 加速 | S 刹车 | A/D 转向 | Space 手刹 | F 驾驶
     </div>
 
     <!-- 地址搜索框（仅在 Google 3D 场景显示） -->
     <div id="location-search" style="display: none; position: absolute; top: 10px; right: 10px; z-index: 100;">
-        <div style="background: rgba(255,255,255,0.95); border-radius: 8px; padding: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); width: 280px;">
-            <input
-                type="text"
-                id="address-input"
-                placeholder="输入地址搜索..."
-                style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box;"
-            />
+        <div
+            style="background: rgba(255,255,255,0.95); border-radius: 8px; padding: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); width: 280px;">
+            <input type="text" id="address-input" placeholder="输入地址搜索..."
+                style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box;" />
             <div id="search-status" style="font-size: 11px; color: #666; margin-top: 4px; padding: 0 4px;"></div>
         </div>
     </div>
@@ -258,8 +444,11 @@
         <div id="mirror-left"></div>
         <!-- Utility buttons moved inside game-container to sit on center console -->
         <!-- 小地图（仅在 Google 3D 场景显示，左下角对齐音乐按钮左下角） -->
-        <div id="minimap-container" style="display: none; position: absolute; top: 82%; left: calc(59% - 70px); transform: translateY(-100%); z-index: 15; pointer-events: none;">
-            <div id="minimap" style="width: 300px; height: 180px; border-radius: 8px; box-shadow: 0 2px 15px rgba(0,0,0,0.5); border: 2px solid rgba(255,255,255,0.6);"></div>
+        <div id="minimap-container"
+            style="display: none; position: absolute; top: 82%; left: calc(59% - 70px); transform: translateY(-100%); z-index: 15; pointer-events: none;">
+            <div id="minimap"
+                style="width: 300px; height: 180px; border-radius: 8px; box-shadow: 0 2px 15px rgba(0,0,0,0.5); border: 2px solid rgba(255,255,255,0.6);">
+            </div>
         </div>
 
         <div id="utility-controls"
@@ -303,6 +492,11 @@
         import { AutoTuner } from './AutoTuner.js';
         import { trainedData } from './trained_data.js';
         import { MountainRoad, SeaHighway, TempleIsland, SceneList } from './scenes/index.js';
+        import { MultiplayerManager } from './multiplayer.js';
+
+        // Multiplayer Manager
+        const multiplayer = new MultiplayerManager();
+        let isMultiplayer = false;
 
         // Google 3D Tiles API Key (从 config.js 读取)
         window.GOOGLE_TILES_API_KEY = window.CONFIG?.GOOGLE_API_KEY || '';
@@ -325,6 +519,107 @@
         let windGain;
         let windFilter;
         let masterGain; // 新增主开关
+
+        let currentDriverId = null;
+        let players = {};
+        let myPlayer = null;
+
+        console.log("Playroom SDK check:", typeof Playroom !== 'undefined' ? "Loaded" : "Not Loaded");
+
+        // 初始化 Playroom 逻辑已移至 multiplayer.js
+
+        function updateDriverUI(name) {
+            let driverEl = document.getElementById('driver-info');
+            if (!driverEl) {
+                driverEl = document.createElement('div');
+                driverEl.id = 'driver-info';
+                driverEl.style.position = 'absolute';
+                driverEl.style.top = '50px';
+                driverEl.style.left = '10px';
+                driverEl.style.color = '#fff';
+                driverEl.style.zIndex = '20';
+                driverEl.style.background = 'rgba(0,0,0,0.5)';
+                driverEl.style.padding = '5px';
+                driverEl.style.borderRadius = '4px';
+                driverEl.style.fontFamily = 'monospace';
+                document.body.appendChild(driverEl);
+            }
+            driverEl.textContent = `当前驾驶员: ${name}`;
+        }
+
+        // Multiplayer Callbacks
+        multiplayer.onDriverChange = (id, name) => {
+            updateDriverUI(name);
+        };
+
+        multiplayer.onCarStateSync = (state) => {
+            if (chassisBody) {
+                chassisBody.position.set(state.pos.x, state.pos.y, state.pos.z);
+                chassisBody.quaternion.set(state.quat.x, state.quat.y, state.quat.z, state.quat.w);
+                chassisBody.velocity.set(state.vel.x, state.vel.y, state.vel.z);
+                chassisBody.angularVelocity.set(state.angVel.x, state.angVel.y, state.angVel.z);
+            }
+        };
+
+        // Start Game Logic
+        async function startGame(multi) {
+            isMultiplayer = multi;
+            if (!isMultiplayer) {
+                document.getElementById('start-screen').style.display = 'none';
+                init();
+                animate();
+            } else {
+                showRoomMenu();
+            }
+        }
+
+        function showRoomMenu() {
+            document.getElementById('mode-selection').style.display = 'none';
+            document.getElementById('room-menu').style.display = 'flex';
+        }
+
+        function showModeSelection() {
+            document.getElementById('mode-selection').style.display = 'flex';
+            document.getElementById('room-menu').style.display = 'none';
+        }
+
+        window.joinRoom = async function (roomId) {
+            console.log("Joining room:", roomId);
+            document.getElementById('start-screen').style.display = 'none';
+            const success = await multiplayer.init();
+            if (success) {
+                init();
+                animate();
+            } else {
+                alert("加入失败");
+                showRoomMenu();
+            }
+        };
+
+        window.createRoom = async function () {
+            console.log("Creating room...");
+            document.getElementById('start-screen').style.display = 'none';
+            const success = await multiplayer.init();
+            if (success) {
+                init();
+                animate();
+            } else {
+                alert("创建失败");
+                showRoomMenu();
+            }
+        };
+
+        window.joinByCode = function () {
+            const code = prompt("请输入房间代码:");
+            if (code) {
+                joinRoom(code);
+            }
+        };
+
+        window.showModeSelection = showModeSelection;
+
+        document.getElementById('btn-single').onclick = () => startGame(false);
+        document.getElementById('btn-multi').onclick = () => startGame(true);
 
         let currentTrackIndex = 0;
         const playlist = [
@@ -750,8 +1045,7 @@
             }
         };
 
-        init();
-        animate();
+        // init() and animate() will be called from startGame()
 
         function initWind() {
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1327,24 +1621,29 @@
                     }
                     break;
                 case 'w':
+                    if (isMultiplayer && !multiplayer.isDriver()) break;
                     const f = up ? maxForce : 0;
                     vehicle.applyEngineForce(0, 0); vehicle.applyEngineForce(0, 1);
                     vehicle.applyEngineForce(f, 2); vehicle.applyEngineForce(f, 3);
                     break;
                 case 's':
+                    if (isMultiplayer && !multiplayer.isDriver()) break;
                     const b = up ? -maxForce : 0;
                     vehicle.applyEngineForce(0, 0); vehicle.applyEngineForce(0, 1);
                     vehicle.applyEngineForce(b, 2); vehicle.applyEngineForce(b, 3);
                     break;
                 case 'a':
+                    if (isMultiplayer && !multiplayer.isDriver()) break;
                     vehicle.setSteeringValue(up ? maxSteer : 0, 0);
                     vehicle.setSteeringValue(up ? maxSteer : 0, 1);
                     break;
                 case 'd':
+                    if (isMultiplayer && !multiplayer.isDriver()) break;
                     vehicle.setSteeringValue(up ? -maxSteer : 0, 0);
                     vehicle.setSteeringValue(up ? -maxSteer : 0, 1);
                     break;
                 case ' ':
+                    if (isMultiplayer && !multiplayer.isDriver()) break;
                     const br = up ? 100 : 0;
                     vehicle.setBrake(br, 2); vehicle.setBrake(br, 3);
                     break;
@@ -1387,8 +1686,16 @@
                         switchScene();
                     }
                     break;
+                case 'f': // F 键抢夺驾驶权
+                    if (up && isMultiplayer) {
+                        multiplayer.claimDriver();
+                        console.log("You are now the driver!");
+                    }
+                    break;
             }
         }
+
+        // isDriver 逻辑已移至 multiplayer.js
 
         function resetCar() {
             // 基于道路计算正确的复位位置
@@ -1577,6 +1884,11 @@
                     currentScene.update(camera, renderer, chassisBody);
                 }
 
+                // --- Multiplayer Sync ---
+                if (isMultiplayer) {
+                    multiplayer.syncCarState(chassisBody);
+                }
+
                 // --- 小地图更新（每10帧更新一次）---
                 if (currentScene && currentScene.constructor.name === 'Google3DTiles') {
                     minimapCounter = (minimapCounter + 1) % 10;
@@ -1763,7 +2075,7 @@
                     traffic.update();
                     // 每3秒打印一次交通状态
                     if (Date.now() % 3000 < 20) {
-                       // console.log(`[Traffic] 车辆数:${traffic.vehicles.length}, 限制:${traffic.limit}, spawnTimer:${traffic.spawnTimer}, playerZ:${chassisBody.position.z.toFixed(0)}`);
+                        // console.log(`[Traffic] 车辆数:${traffic.vehicles.length}, 限制:${traffic.limit}, spawnTimer:${traffic.spawnTimer}, playerZ:${chassisBody.position.z.toFixed(0)}`);
                     }
                 }
             }
