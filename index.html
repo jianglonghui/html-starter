@@ -190,6 +190,25 @@
                 padding: 4px;
             }
         }
+
+        /* Google Places 自动补全下拉框样式 */
+        .pac-container {
+            z-index: 10000 !important;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            border: none;
+            margin-top: 4px;
+        }
+        .pac-item {
+            padding: 8px 12px;
+            cursor: pointer;
+        }
+        .pac-item:hover {
+            background: #f0f0f0;
+        }
+        .pac-item-query {
+            font-size: 14px;
+        }
     </style>
     <script type="importmap">
         {
@@ -203,12 +222,35 @@
 </head>
 
 <body>
+    <!-- API 配置文件 -->
+    <script src="config.js"></script>
+
+    <!-- Google Maps Places API -->
+    <script>
+        (g=>{var h,a,k,p="The Google Maps JavaScript API",c="google",l="importLibrary",q="__ib__",m=document,b=window;b=b[c]||(b[c]={});var d=b.maps||(b.maps={}),r=new Set,e=new URLSearchParams,u=()=>h||(h=new Promise(async(f,n)=>{await (a=m.createElement("script"));e.set("libraries",[...r]);for(k in g)e.set(k.replace(/[A-Z]/g,t=>"_"+t[0].toLowerCase()),g[k]);e.set("callback",c+".maps."+q);a.src=`https://maps.${c}apis.com/maps/api/js?`+e;d[q]=f;a.onerror=()=>h=n(Error(p+" could not load."));a.nonce=m.querySelector("script[nonce]")?.nonce||"";m.head.append(a)}));d[l]?console.warn(p+" only loads once. Ignoring:",g):d[l]=(f,...n)=>r.add(f)&&u().then(()=>d[l](f,...n))})({
+            key: window.CONFIG?.GOOGLE_API_KEY || '',
+            v: "beta"
+        });
+    </script>
 
 
 
     <div id="info">
         ⛰️ 秋名山特训 (无限生成版)<br>
         W 加速 | S 刹车 | A/D 转向 | Space 手刹
+    </div>
+
+    <!-- 地址搜索框（仅在 Google 3D 场景显示） -->
+    <div id="location-search" style="display: none; position: absolute; top: 10px; right: 10px; z-index: 100;">
+        <div style="background: rgba(255,255,255,0.95); border-radius: 8px; padding: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); width: 280px;">
+            <input
+                type="text"
+                id="address-input"
+                placeholder="输入地址搜索..."
+                style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box;"
+            />
+            <div id="search-status" style="font-size: 11px; color: #666; margin-top: 4px; padding: 0 4px;"></div>
+        </div>
     </div>
     <div id="game-container">
         <div id="cockpit-overlay"></div>
@@ -255,6 +297,9 @@
         import { AutoTuner } from './AutoTuner.js';
         import { trainedData } from './trained_data.js';
         import { MountainRoad, SeaHighway, TempleIsland, SceneList } from './scenes/index.js';
+
+        // Google 3D Tiles API Key (从 config.js 读取)
+        window.GOOGLE_TILES_API_KEY = window.CONFIG?.GOOGLE_API_KEY || '';
 
         let orbitControls;
 
@@ -309,6 +354,102 @@
             }
 
             console.log(`%c 🗺️ 场景: ${currentScene.getName()}`, 'background: #333; color: #fff; font-size: 14px;');
+
+            // 显示/隐藏地址搜索框
+            const searchBox = document.getElementById('location-search');
+            if (currentScene.constructor.name === 'Google3DTiles') {
+                searchBox.style.display = 'block';
+                initPlacesAutocomplete();
+            } else {
+                searchBox.style.display = 'none';
+            }
+        }
+
+        // 初始化 Google Places 自动补全
+        let placesInitialized = false;
+        async function initPlacesAutocomplete() {
+            if (placesInitialized) return;
+
+            try {
+                const { Autocomplete } = await google.maps.importLibrary("places");
+
+                const input = document.getElementById('address-input');
+                const statusEl = document.getElementById('search-status');
+
+                const autocomplete = new Autocomplete(input, {
+                    types: ['geocode', 'establishment'],
+                    fields: ['geometry', 'formatted_address', 'name']
+                });
+
+                autocomplete.addListener('place_changed', () => {
+                    const place = autocomplete.getPlace();
+                    if (place.geometry?.location) {
+                        const lat = place.geometry.location.lat();
+                        const lng = place.geometry.location.lng();
+                        const name = place.name || place.formatted_address;
+
+                        statusEl.textContent = `正在加载: ${name}`;
+                        statusEl.style.color = '#0066cc';
+
+                        if (currentScene && currentScene.setLocation) {
+                            currentScene.setLocation(lat, lng, name);
+                            setTimeout(() => {
+                                statusEl.textContent = `✓ ${name}`;
+                                statusEl.style.color = '#00aa00';
+                            }, 2000);
+                        }
+                    }
+                });
+
+                // 回车搜索
+                input.addEventListener('keydown', async (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const address = input.value.trim();
+                        if (!address) return;
+
+                        statusEl.textContent = '搜索中...';
+                        statusEl.style.color = '#666';
+
+                        try {
+                            const { Geocoder } = await google.maps.importLibrary("geocoding");
+                            const geocoder = new Geocoder();
+                            const { results } = await geocoder.geocode({ address });
+
+                            if (results && results[0]) {
+                                const location = results[0].geometry.location;
+                                const lat = location.lat();
+                                const lng = location.lng();
+                                const name = results[0].formatted_address;
+
+                                input.value = name;
+                                statusEl.textContent = `正在加载: ${name}`;
+                                statusEl.style.color = '#0066cc';
+
+                                if (currentScene && currentScene.setLocation) {
+                                    currentScene.setLocation(lat, lng, name);
+                                    setTimeout(() => {
+                                        statusEl.textContent = `✓ 已加载`;
+                                        statusEl.style.color = '#00aa00';
+                                    }, 2000);
+                                }
+                            } else {
+                                statusEl.textContent = '未找到该地址';
+                                statusEl.style.color = '#cc0000';
+                            }
+                        } catch (err) {
+                            statusEl.textContent = '搜索失败';
+                            statusEl.style.color = '#cc0000';
+                        }
+                    }
+                });
+
+                placesInitialized = true;
+                console.log('📍 地址搜索已启用');
+
+            } catch (err) {
+                console.error('Places API 加载失败:', err);
+            }
         }
 
         // 切换场景
@@ -336,6 +477,10 @@
                         w.geometry.dispose();
                         w.material.dispose();
                     });
+                }
+                // 清理 3D Tiles 等资源
+                if (currentScene.dispose) {
+                    currentScene.dispose();
                 }
             }
 
@@ -727,6 +872,7 @@
             chassisBody.addShape(chassisShape);
             chassisBody.position.set(0, 2, -5);
             chassisBody.angularDamping = 0.5;
+            window.chassisBody = chassisBody; // 暴露给场景调用
 
             // 视觉车身组 - 跑车造型
             visualChassis = new THREE.Group();
@@ -907,6 +1053,7 @@
                 chassisBody: chassisBody,
                 indexRightAxis: 0, indexUpAxis: 1, indexForwardAxis: 2,
             });
+            window.vehicle = vehicle; // 暴露给调试
 
             const wheelOptions = {
                 radius: 0.45,
@@ -1067,6 +1214,12 @@
         }
 
         function handler(e) {
+            // 如果焦点在输入框，忽略游戏快捷键
+            const activeEl = document.activeElement;
+            if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
+                return;
+            }
+
             const up = (e.type == 'keydown');
             const maxForce = 2500;
             const maxSteer = 0.45;
@@ -1334,6 +1487,11 @@
             if (isTuningMode) {
                 autoTuningLoop();
             } else {
+                // --- 动态地面更新必须在物理步进前 ---
+                if (currentScene && currentScene.updateDynamicGround) {
+                    currentScene.updateDynamicGround(chassisBody);
+                }
+
                 world.step(1 / 60);
 
                 // --- 核心修改：无限生成触发器 ---
@@ -1344,6 +1502,27 @@
                 // --- 波浪动画更新 ---
                 if (currentScene && currentScene.updateWaves) {
                     currentScene.updateWaves(1 / 60);
+                }
+
+                // --- 3D Tiles 更新 ---
+                if (currentScene && currentScene.update) {
+                    currentScene.update(camera, renderer, chassisBody);
+                }
+
+                // --- 轮子接触状态调试（仅在 Google 3D 场景中显示）---
+                if (currentScene && currentScene.constructor.name === 'Google3DTiles') {
+                    const wheelStatus = vehicle.wheelInfos.map((w, i) =>
+                        w.raycastResult.body ? '●' : '○'
+                    ).join(' ');
+                    const contactCount = vehicle.wheelInfos.filter(w => w.raycastResult.body).length;
+                    const infoEl = document.getElementById('info');
+                    if (infoEl && Date.now() % 500 < 20) {
+                        const pos = chassisBody.position;
+                        infoEl.innerHTML = `🏙️ Google 3D 城市探索<br>
+                            位置: (${pos.x.toFixed(0)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(0)})<br>
+                            轮胎: ${wheelStatus} (${contactCount}/4接地)<br>
+                            速度: ${(chassisBody.velocity.length() * 3.6).toFixed(0)} km/h`;
+                    }
                 }
 
                 // --- 记录人类驾驶数据（行为克隆）---

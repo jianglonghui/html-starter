@@ -766,13 +766,13 @@ export class TrafficManager {
 
         const avgCTE = totalCTE / this.vehicles.length;
 
-        console.clear();
-        console.log("%c 🚦 山路交通性能报告 ", "background: #222; color: #bada55; padding: 2px 5px;");
-        console.table({
-            "当前 NPC 数量": this.vehicles.length,
-            "平均横向误差 (CTE)": avgCTE.toFixed(3) + " m",
-            "系统瞬时最高速": maxV.toFixed(2) + " m/s",
-            "状态评级": avgCTE < 1.0 ? "✅ 稳定行驶" : "❌ 算法偏离"
-        });
+        // console.clear();
+        // console.log("%c 🚦 山路交通性能报告 ", "background: #222; color: #bada55; padding: 2px 5px;");
+        // console.table({
+        //     "当前 NPC 数量": this.vehicles.length,
+        //     "平均横向误差 (CTE)": avgCTE.toFixed(3) + " m",
+        //     "系统瞬时最高速": maxV.toFixed(2) + " m/s",
+        //     "状态评级": avgCTE < 1.0 ? "✅ 稳定行驶" : "❌ 算法偏离"
+        // });
     }
 }

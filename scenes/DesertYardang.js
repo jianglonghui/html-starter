@@ -426,4 +426,47 @@ export class DesertYardang extends BaseScene {
             }
         }
     }
+
+    /**
+     * 清理场景资源
+     */
+    dispose() {
+        // 清理地面
+        if (this.ground) {
+            this.scene.remove(this.ground);
+            this.ground.geometry.dispose();
+            this.ground.material.dispose();
+        }
+
+        // 清理所有山丘
+        this.yardangs.forEach(y => {
+            y.traverse(child => {
+                if (child.isMesh) {
+                    if (child.geometry) child.geometry.dispose();
+                    if (child.material) child.material.dispose();
+                }
+            });
+            this.scene.remove(y);
+        });
+        this.yardangs = [];
+
+        // 清理雾气
+        this.scene.fog = null;
+
+        // 清理天空（查找并移除）
+        const toRemove = [];
+        this.scene.traverse(child => {
+            if (child.isMesh && child.geometry?.type === 'SphereGeometry' && child.geometry?.parameters?.radius > 500) {
+                toRemove.push(child);
+            }
+        });
+        toRemove.forEach(obj => {
+            this.scene.remove(obj);
+            if (obj.geometry) obj.geometry.dispose();
+            if (obj.material) {
+                if (obj.material.map) obj.material.map.dispose();
+                obj.material.dispose();
+            }
+        });
+    }
 }
