@@ -254,7 +254,7 @@
         import { TrafficManager, NPCVehicle } from './traffic.js';
         import { AutoTuner } from './AutoTuner.js';
         import { trainedData } from './trained_data.js';
-        import { MountainRoad, SeaHighway, SceneList } from './scenes/index.js';
+        import { MountainRoad, SeaHighway, TempleIsland, SceneList } from './scenes/index.js';
 
         let orbitControls;
 
@@ -299,7 +299,7 @@
 
         // 初始化场景
         function initScene(index) {
-            const SceneClasses = [MountainRoad, SeaHighway];
+            const SceneClasses = [MountainRoad, SeaHighway, TempleIsland];
             const SceneClass = SceneClasses[index % SceneClasses.length];
             currentScene = new SceneClass(world, scene, roadMat, wallMat);
             currentSceneIndex = index;
@@ -347,7 +347,7 @@
             chassisBody.quaternion.set(0, 0, 0, 1);
 
             // 创建新场景
-            currentSceneIndex = (currentSceneIndex + 1) % 2;
+            currentSceneIndex = (currentSceneIndex + 1) % 3;
             initScene(currentSceneIndex);
 
             // 重置交通
@@ -1270,7 +1270,12 @@
                                 ind.car.updateLabel(ind.uid, info);
                             }
 
-                            if (currentCTE > 10 || pos.y < -10 || isFlipped || isStuck) {
+                            // 坠毁检测：偏离道路中心且高度差大于30，或翻车，或卡住
+                            const heightDiff = road.y - pos.y;
+                            const offRoadThreshold = currentScene ? currentScene.roadWidth / 2 + 5 : 12;
+                            const isFallenOff = currentCTE > offRoadThreshold && heightDiff > 30;
+
+                            if (isFallenOff || isFlipped || isStuck) {
                                 ind.isAlive = false;
                                 ind.car.destroy();
                                 ind.car = null;
@@ -1430,9 +1435,18 @@
 
                 mirrorRenderer.render(scene, mirrorCamera);
 
-                if (currentScene && chassisBody.position.y < currentScene.prevY - 30) {
-                    console.warn(`[Reset] 触发复位! 车Y=${chassisBody.position.y.toFixed(1)}, prevY=${currentScene.prevY.toFixed(1)}, 差值=${(chassisBody.position.y - currentScene.prevY).toFixed(1)}`);
-                    resetCar();
+                // 坠毁检测：偏离道路中心 且 高度差大于30
+                if (currentScene) {
+                    const pos = chassisBody.position;
+                    const road = calculateRoadPoint(pos.z);
+                    const cte = Math.abs(pos.x - road.x); // 横向偏离距离
+                    const heightDiff = road.y - pos.y;    // 高度差（正值表示车比路面低）
+                    const offRoadThreshold = currentScene.roadWidth / 2 + 5; // 道路半宽 + 5米余量
+
+                    if (cte > offRoadThreshold && heightDiff > 30) {
+                        console.warn(`[Reset] 坠毁复位! CTE=${cte.toFixed(1)}, 阈值=${offRoadThreshold}, 高度差=${heightDiff.toFixed(1)}`);
+                        resetCar();
+                    }
                 }
                 if (Date.now() % 60 === 0 && chassisBody.position.y > -1) {
                     lastSafePosition.copy(chassisBody.position);

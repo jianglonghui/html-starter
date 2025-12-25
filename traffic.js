@@ -2,6 +2,54 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 
 /**
+ * 生成香港车牌号码
+ * 格式: 2个英文字母 + 1-4位数字 (如 AB 1234)
+ */
+function generateHKPlateNumber() {
+    const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // 排除 I 和 O 避免混淆
+    const letter1 = letters[Math.floor(Math.random() * letters.length)];
+    const letter2 = letters[Math.floor(Math.random() * letters.length)];
+    const numDigits = 1 + Math.floor(Math.random() * 4); // 1-4位数字
+    let number = '';
+    for (let i = 0; i < numDigits; i++) {
+        number += Math.floor(Math.random() * 10);
+    }
+    return `${letter1}${letter2} ${number}`;
+}
+
+/**
+ * 创建车牌纹理
+ * @param {string} plateNumber - 车牌号码
+ * @param {boolean} isFront - 是否为前车牌 (白底黑字)，否则为后车牌 (黄底黑字)
+ */
+function createPlateTexture(plateNumber, isFront) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 48;
+    const ctx = canvas.getContext('2d');
+
+    // 背景色: 前牌白底，后牌黄底
+    ctx.fillStyle = isFront ? '#ffffff' : '#ffcc00';
+    ctx.fillRect(0, 0, 128, 48);
+
+    // 边框
+    ctx.strokeStyle = '#333333';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(2, 2, 124, 44);
+
+    // 车牌文字
+    ctx.fillStyle = '#000000';
+    ctx.font = 'bold 24px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(plateNumber, 64, 26);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    return texture;
+}
+
+/**
  * 道路坐标核心算法 - 使用全局场景的计算函数
  */
 export function calculateRoadPoint(z) {
@@ -46,12 +94,26 @@ export class NPCVehicle {
         this.chassisBody.angularDamping = 0.5;
 
         const data = calculateRoadPoint(startZ);
-        const nextData = calculateRoadPoint(startZ - 5);
+        const prevData = calculateRoadPoint(startZ + 5); // 后方5米
+        const nextData = calculateRoadPoint(startZ - 5); // 前方5米
 
         // 初始化位置与旋转 (贴近路面生成)
         this.chassisBody.position.set(data.x + laneOffset, data.y + 0.6, startZ);
-        const yaw = Math.atan2(nextData.x - data.x, -5) + Math.PI;
-        const pitch = -Math.atan2(nextData.y - data.y, 5);
+
+        // 计算车头朝向 (yaw)
+        
+        const dx = nextData.x - data.x;
+        const dz = nextData.z - data.z;
+        const yaw = Math.atan2(dx, dz) + Math.PI;
+
+        // 计算坡度 (pitch) - 用前后10米范围计算更准确
+        const dy = nextData.y - prevData.y;
+        const horizontalDist = Math.sqrt(
+            Math.pow(nextData.x - prevData.x, 2) +
+            Math.pow(nextData.z - prevData.z, 2)
+        );
+        const pitch = -Math.atan2(dy, horizontalDist);
+
         const qYaw = new CANNON.Quaternion();
         qYaw.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), yaw);
         const qPitch = new CANNON.Quaternion();
@@ -167,6 +229,22 @@ export class NPCVehicle {
             taillight2.position.set(0.7, 0.35, 2.2);
             this.mesh.add(taillight2);
 
+            // 香港车牌
+            const plateNumber = generateHKPlateNumber();
+            const frontPlateGeo = new THREE.PlaneGeometry(1.0, 0.3);
+            const frontPlateMat = new THREE.MeshBasicMaterial({ map: createPlateTexture(plateNumber, true), side: THREE.DoubleSide });
+            const frontPlate = new THREE.Mesh(frontPlateGeo, frontPlateMat);
+            frontPlate.position.set(0, 0.25, -2.25);
+            frontPlate.rotation.y = Math.PI; // 面向前方
+            this.mesh.add(frontPlate);
+
+            const rearPlateGeo = new THREE.PlaneGeometry(1.0, 0.3);
+            const rearPlateMat = new THREE.MeshBasicMaterial({ map: createPlateTexture(plateNumber, false), side: THREE.DoubleSide });
+            const rearPlate = new THREE.Mesh(rearPlateGeo, rearPlateMat);
+            rearPlate.position.set(0, 0.25, 2.25);
+            // 不旋转，面向后方
+            this.mesh.add(rearPlate);
+
         } else if (this.vehicleType === 1) {
             // === 皮卡 ===
             // 车头部分
@@ -221,6 +299,21 @@ export class NPCVehicle {
             bumper.position.set(0, 0.2, -2.25);
             this.mesh.add(bumper);
 
+            // 香港车牌
+            const plateNumber = generateHKPlateNumber();
+            const frontPlateGeo = new THREE.PlaneGeometry(1.0, 0.3);
+            const frontPlateMat = new THREE.MeshBasicMaterial({ map: createPlateTexture(plateNumber, true), side: THREE.DoubleSide });
+            const frontPlate = new THREE.Mesh(frontPlateGeo, frontPlateMat);
+            frontPlate.position.set(0, 0.3, -2.3);
+            frontPlate.rotation.y = Math.PI;
+            this.mesh.add(frontPlate);
+
+            const rearPlateGeo = new THREE.PlaneGeometry(1.0, 0.3);
+            const rearPlateMat = new THREE.MeshBasicMaterial({ map: createPlateTexture(plateNumber, false), side: THREE.DoubleSide });
+            const rearPlate = new THREE.Mesh(rearPlateGeo, rearPlateMat);
+            rearPlate.position.set(0, 0.3, 2.5);
+            this.mesh.add(rearPlate);
+
         } else {
             // === 货车 ===
             // 车头
@@ -271,6 +364,21 @@ export class NPCVehicle {
             const taillight2 = taillight.clone();
             taillight2.position.set(1.0, 0.5, 2.5);
             this.mesh.add(taillight2);
+
+            // 香港车牌
+            const plateNumber = generateHKPlateNumber();
+            const frontPlateGeo = new THREE.PlaneGeometry(1.0, 0.3);
+            const frontPlateMat = new THREE.MeshBasicMaterial({ map: createPlateTexture(plateNumber, true), side: THREE.DoubleSide });
+            const frontPlate = new THREE.Mesh(frontPlateGeo, frontPlateMat);
+            frontPlate.position.set(0, 0.25, -2.25);
+            frontPlate.rotation.y = Math.PI;
+            this.mesh.add(frontPlate);
+
+            const rearPlateGeo = new THREE.PlaneGeometry(1.0, 0.3);
+            const rearPlateMat = new THREE.MeshBasicMaterial({ map: createPlateTexture(plateNumber, false), side: THREE.DoubleSide });
+            const rearPlate = new THREE.Mesh(rearPlateGeo, rearPlateMat);
+            rearPlate.position.set(0, 0.25, 2.55);
+            this.mesh.add(rearPlate);
         }
 
         this.scene.add(this.mesh);
