@@ -90,6 +90,34 @@ export class Google3DTiles extends BaseScene {
     }
 
     /**
+     * 将本地坐标转换为经纬度
+     * @param {number} x - 本地 X 坐标（东向）
+     * @param {number} z - 本地 Z 坐标（南向，注意负值是北）
+     * @returns {{lat: number, lng: number}}
+     */
+    localToLatLng(x, z) {
+        // 地球半径（米）
+        const R = 6378137;
+        const latRad = this.centerLat * Math.PI / 180;
+
+        // X 方向是东，Z 方向是南（Three.js 中 -Z 是前方/北）
+        const dLat = -z / R * (180 / Math.PI);  // -z 因为 Three.js 中 -Z 是北
+        const dLng = x / (R * Math.cos(latRad)) * (180 / Math.PI);
+
+        return {
+            lat: this.centerLat + dLat,
+            lng: this.centerLng + dLng
+        };
+    }
+
+    /**
+     * 获取当前中心经纬度
+     */
+    getCenter() {
+        return { lat: this.centerLat, lng: this.centerLng };
+    }
+
+    /**
      * 动态切换位置
      */
     setLocation(lat, lng, address = '') {
@@ -119,6 +147,11 @@ export class Google3DTiles extends BaseScene {
 
         // 重新加载
         this.init3DTiles();
+
+        // 触发小地图更新事件
+        window.dispatchEvent(new CustomEvent('locationChanged', {
+            detail: { lat, lng, address }
+        }));
 
         console.log(`📍 切换位置: ${address || `${lat}, ${lng}`}`);
     }

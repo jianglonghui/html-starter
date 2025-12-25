@@ -704,12 +704,12 @@ export class TrafficManager {
                 const potentialLane = Math.random() > 0.5 ? 3.5 : -3.5;
 
                 const safe = this.isAreaSafe(potentialZ, potentialLane);
-                console.log(`[Spawn尝试] potentialZ=${potentialZ.toFixed(0)}, lane=${potentialLane}, safe=${safe}`);
+                //console.log(`[Spawn尝试] potentialZ=${potentialZ.toFixed(0)}, lane=${potentialLane}, safe=${safe}`);
 
                 if (safe) {
                     this.vehicles.push(new NPCVehicle(potentialZ, potentialLane, this.world, this.scene));
                     this.spawnTimer = 0;
-                    console.log(`[Spawn成功] 新车生成于 Z=${potentialZ.toFixed(0)}`);
+                    //console.log(`[Spawn成功] 新车生成于 Z=${potentialZ.toFixed(0)}`);
                 }
             }
         }

@@ -252,12 +252,18 @@
             <div id="search-status" style="font-size: 11px; color: #666; margin-top: 4px; padding: 0 4px;"></div>
         </div>
     </div>
+
     <div id="game-container">
         <div id="cockpit-overlay"></div>
         <div id="mirror-left"></div>
         <!-- Utility buttons moved inside game-container to sit on center console -->
+        <!-- 小地图（仅在 Google 3D 场景显示，左下角对齐音乐按钮左下角） -->
+        <div id="minimap-container" style="display: none; position: absolute; top: 82%; left: calc(59% - 70px); transform: translateY(-100%); z-index: 15; pointer-events: none;">
+            <div id="minimap" style="width: 300px; height: 180px; border-radius: 8px; box-shadow: 0 2px 15px rgba(0,0,0,0.5); border: 2px solid rgba(255,255,255,0.6);"></div>
+        </div>
+
         <div id="utility-controls"
-            style="position: absolute; top: 82%; left: 59%; transform: translate(-50%, -50%); pointer-events: auto; display: flex; flex-wrap: wrap; justify-content: center; width: 140px; z-index: 20;">
+            style="position: absolute; top: calc(82% + 35px); left: 59%; transform: translate(-50%, -50%); pointer-events: auto; display: flex; flex-wrap: wrap; justify-content: center; width: 140px; z-index: 20;">
             <div id="btn-music" class="btn btn-rect" style="width: 35px; height: 35px; margin: 2px;">🎵</div>
             <div id="btn-scene" class="btn btn-rect" style="width: 35px; height: 35px; margin: 2px;">🌄</div>
             <div id="btn-fullscreen" class="btn btn-rect" style="width: 35px; height: 35px; margin: 2px;">⛶</div>
@@ -355,13 +361,17 @@
 
             console.log(`%c 🗺️ 场景: ${currentScene.getName()}`, 'background: #333; color: #fff; font-size: 14px;');
 
-            // 显示/隐藏地址搜索框
+            // 显示/隐藏地址搜索框和小地图
             const searchBox = document.getElementById('location-search');
+            const minimapContainer = document.getElementById('minimap-container');
             if (currentScene.constructor.name === 'Google3DTiles') {
                 searchBox.style.display = 'block';
+                minimapContainer.style.display = 'block';
                 initPlacesAutocomplete();
+                initMinimap();
             } else {
                 searchBox.style.display = 'none';
+                minimapContainer.style.display = 'none';
             }
         }
 
@@ -377,7 +387,6 @@
                 const statusEl = document.getElementById('search-status');
 
                 const autocomplete = new Autocomplete(input, {
-                    types: ['geocode', 'establishment'],
                     fields: ['geometry', 'formatted_address', 'name']
                 });
 
@@ -401,54 +410,108 @@
                     }
                 });
 
-                // 回车搜索
-                input.addEventListener('keydown', async (e) => {
-                    if (e.key === 'Enter') {
-                        e.preventDefault();
-                        const address = input.value.trim();
-                        if (!address) return;
-
-                        statusEl.textContent = '搜索中...';
-                        statusEl.style.color = '#666';
-
-                        try {
-                            const { Geocoder } = await google.maps.importLibrary("geocoding");
-                            const geocoder = new Geocoder();
-                            const { results } = await geocoder.geocode({ address });
-
-                            if (results && results[0]) {
-                                const location = results[0].geometry.location;
-                                const lat = location.lat();
-                                const lng = location.lng();
-                                const name = results[0].formatted_address;
-
-                                input.value = name;
-                                statusEl.textContent = `正在加载: ${name}`;
-                                statusEl.style.color = '#0066cc';
-
-                                if (currentScene && currentScene.setLocation) {
-                                    currentScene.setLocation(lat, lng, name);
-                                    setTimeout(() => {
-                                        statusEl.textContent = `✓ 已加载`;
-                                        statusEl.style.color = '#00aa00';
-                                    }, 2000);
-                                }
-                            } else {
-                                statusEl.textContent = '未找到该地址';
-                                statusEl.style.color = '#cc0000';
-                            }
-                        } catch (err) {
-                            statusEl.textContent = '搜索失败';
-                            statusEl.style.color = '#cc0000';
-                        }
-                    }
-                });
-
                 placesInitialized = true;
                 console.log('📍 地址搜索已启用');
 
             } catch (err) {
                 console.error('Places API 加载失败:', err);
+            }
+        }
+
+        // 初始化小地图
+        let minimapInstance = null;
+        let minimapMarker = null;
+        let minimapInitialized = false;
+        let minimapCounter = 0;
+
+        async function initMinimap() {
+            if (minimapInitialized && minimapInstance) {
+                // 已初始化，只需更新中心点
+                updateMinimapCenter();
+                return;
+            }
+
+            // 确保场景已加载且有 getCenter 方法
+            if (!currentScene || typeof currentScene.getCenter !== 'function') {
+                console.log('等待场景加载...');
+                setTimeout(initMinimap, 500);
+                return;
+            }
+
+            try {
+                const { Map } = await google.maps.importLibrary("maps");
+                const center = currentScene.getCenter();
+                const mapEl = document.getElementById('minimap');
+
+                minimapInstance = new Map(mapEl, {
+                    center: center,
+                    zoom: 17,
+                    disableDefaultUI: true,
+                    gestureHandling: 'none',
+                    mapTypeId: 'roadmap'
+                });
+
+                // 使用 Symbol 标记（箭头，不需要 Map ID）
+                minimapMarker = new google.maps.Marker({
+                    position: center,
+                    map: minimapInstance,
+                    icon: {
+                        path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+                        scale: 5,
+                        fillColor: '#ff3300',
+                        fillOpacity: 1,
+                        strokeColor: '#ffffff',
+                        strokeWeight: 2,
+                        rotation: 0
+                    }
+                });
+
+                // 监听位置变更事件
+                window.addEventListener('locationChanged', (e) => {
+                    const { lat, lng } = e.detail;
+                    minimapInstance.setCenter({ lat, lng });
+                    minimapMarker.setPosition({ lat, lng });
+                });
+
+                minimapInitialized = true;
+                console.log('🗺️ 小地图已启用');
+
+            } catch (err) {
+                console.error('小地图初始化失败:', err);
+            }
+        }
+
+        function updateMinimapCenter() {
+            if (!minimapInstance || !currentScene || !currentScene.getCenter) return;
+            const center = currentScene.getCenter();
+            minimapInstance.setCenter(center);
+            if (minimapMarker) {
+                minimapMarker.setPosition(center);
+            }
+        }
+
+        function updateMinimap() {
+            if (!minimapInstance || !minimapMarker || !currentScene || !currentScene.localToLatLng) return;
+
+            const pos = chassisBody.position;
+            const carLatLng = currentScene.localToLatLng(pos.x, pos.z);
+
+            // 更新标记位置
+            minimapMarker.setPosition(carLatLng);
+
+            // 让地图跟随车辆
+            minimapInstance.panTo(carLatLng);
+
+            // 更新车辆朝向（基于速度方向）
+            const vel = chassisBody.velocity;
+            if (vel.length() > 1) {
+                const heading = Math.atan2(vel.x, -vel.z) * (180 / Math.PI);
+                // 更新箭头旋转
+                const icon = minimapMarker.getIcon();
+                if (icon) {
+                    icon.rotation = heading;
+                    minimapMarker.setIcon(icon);
+                }
             }
         }
 
@@ -1214,9 +1277,14 @@
         }
 
         function handler(e) {
-            // 如果焦点在输入框，忽略游戏快捷键
+            // 如果焦点在输入框或自动补全组件，忽略游戏快捷键
             const activeEl = document.activeElement;
-            if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
+            if (activeEl && (
+                activeEl.tagName === 'INPUT' ||
+                activeEl.tagName === 'TEXTAREA' ||
+                activeEl.tagName === 'GMP-PLACE-AUTOCOMPLETE' ||
+                activeEl.closest('gmp-place-autocomplete')
+            )) {
                 return;
             }
 
@@ -1509,6 +1577,14 @@
                     currentScene.update(camera, renderer, chassisBody);
                 }
 
+                // --- 小地图更新（每10帧更新一次）---
+                if (currentScene && currentScene.constructor.name === 'Google3DTiles') {
+                    minimapCounter = (minimapCounter + 1) % 10;
+                    if (minimapCounter === 0) {
+                        updateMinimap();
+                    }
+                }
+
                 // --- 轮子接触状态调试（仅在 Google 3D 场景中显示）---
                 if (currentScene && currentScene.constructor.name === 'Google3DTiles') {
                     const wheelStatus = vehicle.wheelInfos.map((w, i) =>
@@ -1687,7 +1763,7 @@
                     traffic.update();
                     // 每3秒打印一次交通状态
                     if (Date.now() % 3000 < 20) {
-                        console.log(`[Traffic] 车辆数:${traffic.vehicles.length}, 限制:${traffic.limit}, spawnTimer:${traffic.spawnTimer}, playerZ:${chassisBody.position.z.toFixed(0)}`);
+                       // console.log(`[Traffic] 车辆数:${traffic.vehicles.length}, 限制:${traffic.limit}, spawnTimer:${traffic.spawnTimer}, playerZ:${chassisBody.position.z.toFixed(0)}`);
                     }
                 }
             }
