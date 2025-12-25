@@ -277,16 +277,16 @@
 
         let currentTrackIndex = 0;
         const playlist = [
-            'traffic-264578.mp3', // 你的第一首歌
-            'song2.mp3',          // 你的第二首歌（确保本地有这个文件）
-            'song3.mp3'           // 你的第三首歌
+            'traffic-264578.mp3',
+            'podcast.m4a',
+            'desert.m4a'
         ];
         let lastSafePosition = new CANNON.Vec3(0, 2, 0);
         let lastSafeQuaternion = new CANNON.Quaternion();
 
         // --- 场景管理 ---
         let currentScene = null;
-        let currentSceneIndex = 0;
+        let currentSceneIndex = Math.floor(Math.random() * SceneList.length);
         const segLen = 15;        // 每段长度（供其他模块使用）
 
         // 全局 calculateRoadPoint 供 traffic.js 使用
@@ -299,8 +299,7 @@
 
         // 初始化场景
         function initScene(index) {
-            const SceneClasses = [MountainRoad, SeaHighway, TempleIsland];
-            const SceneClass = SceneClasses[index % SceneClasses.length];
+            const SceneClass = SceneList[index % SceneList.length].class;
             currentScene = new SceneClass(world, scene, roadMat, wallMat);
             currentSceneIndex = index;
 
@@ -347,7 +346,7 @@
             chassisBody.quaternion.set(0, 0, 0, 1);
 
             // 创建新场景
-            currentSceneIndex = (currentSceneIndex + 1) % 3;
+            currentSceneIndex = (currentSceneIndex + 1) % SceneList.length;
             initScene(currentSceneIndex);
 
             // 重置交通
@@ -604,12 +603,32 @@
         }
 
         function initMusic() {
-            // 使用一个舒缓的 Lo-fi 风格免版权音乐链接 (示例)
-            const musicUrl = 'traffic-264578.mp3';
+            playTrack(currentTrackIndex);
+        }
 
-            bgMusic = new Audio(musicUrl);
-            bgMusic.loop = true;      // 循环播放
-            bgMusic.volume = 0.4;    // 音量 40%，不干扰驾驶判断
+        function playTrack(index) {
+            if (index < 0) index = playlist.length - 1;
+            if (index >= playlist.length) index = 0;
+            currentTrackIndex = index;
+
+            if (bgMusic) {
+                bgMusic.pause();
+            }
+            bgMusic = new Audio(playlist[currentTrackIndex]);
+            bgMusic.volume = 0.4;
+            bgMusic.addEventListener('ended', () => nextTrack());
+            if (isMusicPlaying) {
+                bgMusic.play().catch(err => console.log("等待交互以播放音频"));
+            }
+            console.log(`正在播放: ${playlist[currentTrackIndex]}`);
+        }
+
+        function nextTrack() {
+            playTrack(currentTrackIndex + 1);
+        }
+
+        function prevTrack() {
+            playTrack(currentTrackIndex - 1);
         }
 
         function init() {
@@ -1076,6 +1095,16 @@
                         isMusicPlaying = !isMusicPlaying;
                     }
                     break;
+                case 'u': // U 键下一首
+                    if (up && bgMusic) {
+                        nextTrack();
+                    }
+                    break;
+                case 'p': // P 键上一首
+                    if (up && bgMusic) {
+                        prevTrack();
+                    }
+                    break;
                 case 'w':
                     const f = up ? maxForce : 0;
                     vehicle.applyEngineForce(0, 0); vehicle.applyEngineForce(0, 1);
@@ -1141,10 +1170,10 @@
         }
 
         function resetCar() {
-            chassisBody.position.copy(lastSafePosition);
-            chassisBody.position.x += 2;
-            chassisBody.position.y += 2;
-            chassisBody.quaternion.copy(lastSafeQuaternion);
+            // 基于道路计算正确的复位位置
+            const road = currentScene.calculateRoadPoint(lastSafePosition.z);
+            chassisBody.position.set(road.x, road.y + 1, lastSafePosition.z);
+            chassisBody.quaternion.set(0, 0, 0, 1); // 重置为正向
             chassisBody.velocity.set(0, 0, 0);
             chassisBody.angularVelocity.set(0, 0, 0);
         }
