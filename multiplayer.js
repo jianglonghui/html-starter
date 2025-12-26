@@ -29,6 +29,7 @@ export class MultiplayerManager {
             await insertCoin(options);
             console.log("Playroom insertCoin successful");
             this._myPlayer = myPlayer();
+            console.log("My Player ID:", this._myPlayer?.id);
             this.isInitialized = true;
 
             onPlayerJoin((player) => {
@@ -42,9 +43,13 @@ export class MultiplayerManager {
             // 获取实际的房间代码（从 URL hash 中获取，Playroom 会自动设置）
             const getActualRoomCode = () => {
                 const hash = window.location.hash;
+                console.log("Current URL Hash:", hash);
                 if (hash && hash.includes('r=')) {
-                    return hash.split('r=')[1].split('&')[0];
+                    const extracted = hash.split('r=')[1].split('&')[0];
+                    console.log("Extracted from hash:", extracted);
+                    return extracted;
                 }
+                console.log("No r= in hash, returning:", roomCode || "PLAYROOM");
                 return roomCode || "PLAYROOM";
             };
 
@@ -125,6 +130,7 @@ export class MultiplayerManager {
     // 发送按键事件（驾驶员调用）
     sendKeyEvent(key, isDown) {
         if (this.isDriver()) {
+            console.log(`[Driver] Sending RPC keyEvent: ${key} ${isDown ? 'DOWN' : 'UP'}`);
             RPC.call("keyEvent", { key, isDown }, RPC.Mode.OTHERS);
         }
     }
@@ -177,6 +183,7 @@ export class MultiplayerManager {
     // 事件同步：只同步按键按下/松开事件
     syncKeyEvent(key, isDown) {
         if (this.isDriver()) {
+            console.log(`[Driver] syncKeyEvent (setState): ${key} ${isDown ? 'DOWN' : 'UP'}`);
             setState("keyEvent", {
                 key: key,
                 isDown: isDown,
