@@ -448,7 +448,18 @@
             </div>
             <div id="btn-view" class="btn btn-rect" style="width: 55px; height: 30px; margin: 2px; font-size: 12px;">视角
             </div>
+            <div id="btn-photo" class="btn btn-rect" style="width: 35px; height: 35px; margin: 2px;">📷</div>
         </div>
+    </div>
+
+    <!-- 拍照模式专用按钮 -->
+    <div id="photo-mode-ui"
+        style="display: none; position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); z-index: 3000; gap: 20px;">
+        <button id="btn-capture"
+            style="padding: 15px 30px; font-size: 18px; background: #4CAF50; color: white; border: none; border-radius: 30px; cursor: pointer; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">📸
+            拍摄全屏风景</button>
+        <button id="btn-exit-photo"
+            style="padding: 15px 30px; font-size: 18px; background: rgba(255,255,255,0.2); color: white; border: 1px solid white; border-radius: 30px; cursor: pointer; backdrop-filter: blur(5px);">退出拍照</button>
     </div>
 
     <div id="portrait-warning">
@@ -476,11 +487,13 @@
         import * as CANNON from 'cannon-es';
         import { Sky } from 'https://unpkg.com/three@0.160.0/examples/jsm/objects/Sky.js';
         import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+        import saveAs from 'https://esm.sh/file-saver@2.0.5';
         import { TrafficManager, NPCVehicle } from './traffic.js';
         import { AutoTuner } from './AutoTuner.js';
         import { trainedData } from './trained_data.js';
         import { MountainRoad, SeaHighway, TempleIsland, SceneList } from './scenes/index.js';
         import { MultiplayerManager } from './multiplayer.js';
+        import { PhotoEnhancer } from './photoEnhancer.js';
 
         // Multiplayer Manager
         const multiplayer = new MultiplayerManager();
@@ -488,6 +501,9 @@
 
         // Google 3D Tiles API Key (从 config.js 读取)
         window.GOOGLE_TILES_API_KEY = window.CONFIG?.GOOGLE_API_KEY || '';
+
+        // 照片增强器
+        const photoEnhancer = new PhotoEnhancer(window.CONFIG?.GOOGLE_API_KEY || '');
 
         let orbitControls;
 
@@ -500,6 +516,10 @@
         let bgMusic;
         let isMusicPlaying = false;
         let traffic;
+        let isPhotoMode = false;
+        let photoModeRotation = { yaw: 0, pitch: 0 };
+        let isDraggingPhoto = false;
+        let lastMousePos = { x: 0, y: 0 };
 
         // 事件同步：simulateKey 函数在 handler 中定义
         let roadMat, wallMat;
@@ -1399,7 +1419,8 @@
             mirrorCamera = new THREE.PerspectiveCamera(60, 1.8, 0.1, 500);
 
             const container = document.getElementById('game-container');
-            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(container.clientWidth, container.clientHeight);
             renderer.shadowMap.enabled = true;
 
@@ -1414,6 +1435,15 @@
             orbitControls.dampingFactor = 0.05;
             orbitControls.target.set(0, 0, -100); // 看向路的方向
             camera.position.set(0, 50, 50);       // 俯视初始位置
+
+            // 限制视角，防止看到地平线以下（地面以下）
+            // Math.PI / 2 是 90 度，即水平位置
+            orbitControls.maxPolarAngle = Math.PI / 2 * 0.98; // 允许接近水平，但不穿地
+            orbitControls.minPolarAngle = 0.1; // 防止完全垂直向下看导致万向锁
+
+            // 反转旋转方向，使其更符合“拟人”操作（向上拖动即抬头看天）
+            orbitControls.rotateSpeed = -1.0;
+
             orbitControls.update();
 
             const mDiv = document.getElementById('mirror-left');
@@ -1770,6 +1800,18 @@
                 switchScene();
             });
 
+            document.getElementById('btn-photo').addEventListener('click', () => {
+                togglePhotoMode(true);
+            });
+
+            document.getElementById('btn-capture').addEventListener('click', () => {
+                takeScreenshot();
+            });
+
+            document.getElementById('btn-exit-photo').addEventListener('click', () => {
+                togglePhotoMode(false);
+            });
+
             window.addEventListener('resize', () => {
                 if (!camera || !renderer) return;
                 const container = document.getElementById('game-container');
@@ -1924,7 +1966,206 @@
                         console.log("You are now the driver!");
                     }
                     break;
+                case 'k': // K 键快捷进入拍照模式
+                    if (up) togglePhotoMode(!isPhotoMode);
+                    break;
             }
+        }
+
+        function togglePhotoMode(enabled) {
+            isPhotoMode = enabled;
+            console.log(`[Photo Mode] ${enabled ? 'Enabled' : 'Disabled'}`);
+
+            if (enabled) {
+                // 禁用轨道相机
+                if (orbitControls) orbitControls.enabled = false;
+
+                // 拟人化：将相机固定在当前位置（或车旁一个高度）
+                // 如果是从第一人称进入，位置已经在驾驶位；如果是第三人称，位置在车后上方
+                // 我们保持当前位置，但重置旋转逻辑
+
+                // 初始化旋转角度（基于当前相机朝向）
+                const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
+                photoModeRotation.yaw = euler.y;
+                photoModeRotation.pitch = euler.x;
+
+                // 添加拖拽监听
+                const container = document.getElementById('game-container');
+
+                const onPointerDown = (e) => {
+                    if (!isPhotoMode) return;
+                    isDraggingPhoto = true;
+                    lastMousePos.x = e.clientX || (e.touches && e.touches[0].clientX);
+                    lastMousePos.y = e.clientY || (e.touches && e.touches[0].clientY);
+                };
+
+                const onPointerMove = (e) => {
+                    if (!isPhotoMode || !isDraggingPhoto) return;
+                    const clientX = e.clientX || (e.touches && e.touches[0].clientX);
+                    const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+
+                    const deltaX = clientX - lastMousePos.x;
+                    const deltaY = clientY - lastMousePos.y;
+
+                    // 灵敏度系数
+                    const sensitivity = 0.005;
+                    photoModeRotation.yaw -= deltaX * sensitivity;
+                    photoModeRotation.pitch -= deltaY * sensitivity;
+
+                    // 限制俯仰角，防止翻转
+                    photoModeRotation.pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, photoModeRotation.pitch));
+
+                    lastMousePos.x = clientX;
+                    lastMousePos.y = clientY;
+                };
+
+                const onPointerUp = () => {
+                    isDraggingPhoto = false;
+                };
+
+                // 绑定事件（仅在进入时绑定一次，或者确保不重复绑定）
+                if (!window._photoModeEventsBound) {
+                    container.addEventListener('mousedown', onPointerDown);
+                    window.addEventListener('mousemove', onPointerMove);
+                    window.addEventListener('mouseup', onPointerUp);
+
+                    container.addEventListener('touchstart', onPointerDown, { passive: false });
+                    window.addEventListener('touchmove', onPointerMove, { passive: false });
+                    window.addEventListener('touchend', onPointerUp);
+
+                    window._photoModeEventsBound = true;
+                }
+            } else {
+                // 退出拍照模式，恢复轨道相机（如果需要）
+                if (orbitControls) orbitControls.enabled = false; // 默认还是保持关闭，除非是调试模式
+            }
+
+            // 1. 隐藏/显示车辆
+            if (visualChassis) visualChassis.visible = !enabled;
+            visualWheels.forEach(w => w.visible = !enabled);
+
+            // 2. 隐藏/显示 UI 元素
+            const uiElements = [
+                'info', 'utility-controls', 'mobile-controls', 'cockpit-overlay',
+                'mirror-left', 'driver-info', 'room-code-display', 'location-search', 'minimap-container'
+            ];
+            uiElements.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.style.display = enabled ? 'none' : (id === 'cockpit-overlay' ? (isFirstPerson ? 'block' : 'none') : '');
+            });
+
+            // 3. 显示/隐藏拍照专用 UI
+            document.getElementById('photo-mode-ui').style.display = enabled ? 'flex' : 'none';
+
+            // 4. 启用/禁用自由相机
+            if (orbitControls) {
+                orbitControls.enabled = enabled;
+                if (enabled) {
+                    // 进入拍照模式时，将焦点设在车的位置，但允许自由旋转
+                    orbitControls.target.copy(chassisBody.position);
+                    orbitControls.update();
+                }
+            }
+
+            // 5. 提示
+            if (enabled) {
+                console.log("已进入拍照模式：拖动画面调整视角，点击下方按钮拍照。");
+            }
+        }
+        // 辅助函数：将 DataURL 转换为 Blob (同步)
+        function dataURLtoBlob(dataurl) {
+            try {
+                const arr = dataurl.split(',');
+                const mime = arr[0].match(/:(.*?);/)[1];
+                const bstr = atob(arr[1]);
+                let n = bstr.length;
+                const u8arr = new Uint8Array(n);
+                while (n--) {
+                    u8arr[n] = bstr.charCodeAt(n);
+                }
+                return new Blob([u8arr], { type: mime });
+            } catch (e) {
+                console.error("DataURL to Blob conversion failed:", e);
+                return null;
+            }
+        }
+
+        function takeScreenshot() {
+            const photoUI = document.getElementById('photo-mode-ui');
+            photoUI.style.display = 'none';
+
+            // 1. 闪光灯效果
+            const flash = document.createElement('div');
+            flash.style.position = 'fixed';
+            flash.style.top = '0'; flash.style.left = '0';
+            flash.style.width = '100%'; flash.style.height = '100%';
+            flash.style.backgroundColor = 'white'; flash.style.zIndex = '9999';
+            flash.style.pointerEvents = 'none';
+            document.body.appendChild(flash);
+
+            // 2. 强制渲染
+            renderer.render(scene, camera);
+
+            // 3. 用 FileSaver.js 保存（成熟方案）
+            const fileName = `RacingPhoto_${Date.now()}.png`;
+
+            renderer.domElement.toBlob((blob) => {
+                if (!blob) {
+                    console.error("截图失败: toBlob returned null");
+                    alert("截图失败: 无法生成图片");
+                    photoUI.style.display = 'flex';
+                    if (flash.parentNode) document.body.removeChild(flash);
+                    return;
+                }
+
+                console.log(`[Screenshot] Blob created: ${(blob.size / 1024 / 1024).toFixed(2)}MB, type: ${blob.type}`);
+
+                // 使用 File System Access API（Chrome 86+ 原生文件保存）
+                if (window.showSaveFilePicker) {
+                    (async () => {
+                        try {
+                            const handle = await window.showSaveFilePicker({
+                                suggestedName: fileName,
+                                types: [{
+                                    description: 'PNG Image',
+                                    accept: { 'image/png': ['.png'] }
+                                }]
+                            });
+                            const writable = await handle.createWritable();
+                            await writable.write(blob);
+                            await writable.close();
+                            console.log(`[Screenshot] 文件已保存: ${fileName}`);
+
+                            // 后台调用 AI 增强
+                            photoEnhancer.enhanceAndSave(blob, fileName);
+                        } catch (err) {
+                            if (err.name !== 'AbortError') {
+                                console.error('[Screenshot] 保存失败:', err);
+                            }
+                        }
+                    })();
+                } else {
+                    // 回退方案
+                    saveAs(blob, fileName);
+                    console.log(`[Screenshot] saveAs fallback: ${fileName}`);
+
+                    // 后台调用 AI 增强
+                    photoEnhancer.enhanceAndSave(blob, fileName);
+                }
+
+                // 闪光灯淡出
+                let opacity = 1.0;
+                const fade = setInterval(() => {
+                    opacity -= 0.2;
+                    if (opacity <= 0) {
+                        clearInterval(fade);
+                        if (flash.parentNode) document.body.removeChild(flash);
+                        photoUI.style.display = 'flex';
+                    } else {
+                        flash.style.opacity = opacity;
+                    }
+                }, 30);
+            }, 'image/png');
         }
 
         // isDriver 逻辑已移至 multiplayer.js
@@ -2234,29 +2475,32 @@
                 }
 
 
-                // 定义两种视角的参数
-                const tpSeatOffset = new THREE.Vector3(0, 5, 10);      // 第三人称：高处往后
-                const fpSeatOffset = new THREE.Vector3(-0.4, 1.5, -1);  // 第一人称：驾驶员头部位置
+                if (!isPhotoMode) {
+                    // 定义两种视角的参数
+                    const tpSeatOffset = new THREE.Vector3(0, 5, 10);      // 第三人称：高处往后
+                    const fpSeatOffset = new THREE.Vector3(-0.4, 1.5, -1);  // 第一人称：驾驶员头部位置
 
-                const tpLookOffset = new THREE.Vector3(0, 0, -5);      // 第三人称：看车头前方
-                const fpLookOffset = new THREE.Vector3(-0.4, -1.5, -10); // 第一人称：平视远方
+                    const tpLookOffset = new THREE.Vector3(0, 0, -5);      // 第三人称：看车头前方
+                    const fpLookOffset = new THREE.Vector3(-0.4, -1.5, -10); // 第一人称：平视远方
 
-                // 根据当前视角选择参数
-                const currentSeat = isFirstPerson ? fpSeatOffset : tpSeatOffset;
-                const currentLook = isFirstPerson ? fpLookOffset : tpLookOffset;
+                    // 根据当前视角选择参数
+                    const currentSeat = isFirstPerson ? fpSeatOffset : tpSeatOffset;
+                    const currentLook = isFirstPerson ? fpLookOffset : tpLookOffset;
 
-                // 计算相机在世界空间的位置
-                // .clone() 很重要，防止修改原始向量
-                const camPos = currentSeat.clone().applyMatrix4(visualChassis.matrixWorld);
+                    // 计算相机在世界空间的位置
+                    const camPos = currentSeat.clone().applyMatrix4(visualChassis.matrixWorld);
 
-                // 平滑跟随
-                // 第一人称需要 lerp 极高（0.9）甚至直接 copy，否则会有延迟感导致晕车
-                // 第三人称可以 lerp 低一点（0.1）增加动感
-                camera.position.lerp(camPos, isFirstPerson ? 0.95 : 0.1);
+                    // 平滑跟随
+                    camera.position.lerp(camPos, isFirstPerson ? 0.95 : 0.1);
 
-                // 计算相机看向的目标点
-                const lookTarget = currentLook.clone().applyMatrix4(visualChassis.matrixWorld);
-                camera.lookAt(lookTarget);
+                    // 计算相机看向的目标点
+                    const lookTarget = currentLook.clone().applyMatrix4(visualChassis.matrixWorld);
+                    camera.lookAt(lookTarget);
+                } else {
+                    // 拍照模式：拟人化“原地转头”
+                    // 位置保持不变（在进入那一刻固定），只更新旋转
+                    camera.rotation.set(photoModeRotation.pitch, photoModeRotation.yaw, 0, 'YXZ');
+                }
                 // const seatOffset = new THREE.Vector3(0.4, 4, 8); 
                 // const camPos = seatOffset.applyMatrix4(visualChassis.matrixWorld);
                 // camera.position.lerp(camPos, 0.3);
