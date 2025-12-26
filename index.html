@@ -400,20 +400,8 @@
         <div id="room-menu">
             <h2>房间列表</h2>
             <div class="room-list" id="room-list-container">
-                <!-- Mock Rooms -->
-                <div class="room-item" onclick="joinRoom('AKINA-01')">
-                    <div class="room-info">
-                        <span class="room-name">秋名山飙车群</span>
-                        <span class="room-players">3/5 正在驾驶</span>
-                    </div>
-                    <button class="join-btn">加入</button>
-                </div>
-                <div class="room-item" onclick="joinRoom('DRIFT-KING')">
-                    <div class="room-info">
-                        <span class="room-name">漂移之王挑战赛</span>
-                        <span class="room-players">1/5 等待中</span>
-                    </div>
-                    <button class="join-btn">加入</button>
+                <div style="padding: 20px; text-align: center; opacity: 0.6;">
+                    正在寻找可用房间...
                 </div>
             </div>
             <div class="room-actions">
@@ -512,6 +500,8 @@
         let bgMusic;
         let isMusicPlaying = false;
         let traffic;
+
+        // 事件同步：simulateKey 函数在 handler 中定义
         let roadMat, wallMat;
 
         let audioCtx;
@@ -528,7 +518,7 @@
 
         // 初始化 Playroom 逻辑已移至 multiplayer.js
 
-        function updateDriverUI(name) {
+        function updateDriverUI(name, isMe = false) {
             let driverEl = document.getElementById('driver-info');
             if (!driverEl) {
                 driverEl = document.createElement('div');
@@ -539,25 +529,113 @@
                 driverEl.style.color = '#fff';
                 driverEl.style.zIndex = '20';
                 driverEl.style.background = 'rgba(0,0,0,0.5)';
-                driverEl.style.padding = '5px';
-                driverEl.style.borderRadius = '4px';
-                driverEl.style.fontFamily = 'monospace';
+                driverEl.style.padding = '8px 12px';
+                driverEl.style.borderRadius = '8px';
+                driverEl.style.fontFamily = 'Inter, sans-serif';
+                driverEl.style.border = '1px solid rgba(255,255,255,0.2)';
+                driverEl.style.backdropFilter = 'blur(5px)';
                 document.body.appendChild(driverEl);
             }
-            driverEl.textContent = `当前驾驶员: ${name}`;
+            const displayName = isMe ? `<span style="color: #4CAF50; font-weight: bold;">你 (YOU)</span>` : name;
+            driverEl.innerHTML = `<span style="opacity: 0.7; font-size: 12px;">当前驾驶员</span><br>${displayName}`;
         }
 
         // Multiplayer Callbacks
         multiplayer.onDriverChange = (id, name) => {
-            updateDriverUI(name);
+            const isMe = multiplayer._myPlayer && id === multiplayer._myPlayer.id;
+            updateDriverUI(name, isMe);
+            // 换驾驶员时重置车辆输入状态（清除残留的按键效果）
+            if (vehicle) {
+                vehicle.applyEngineForce(0, 0);
+                vehicle.applyEngineForce(0, 1);
+                vehicle.applyEngineForce(0, 2);
+                vehicle.applyEngineForce(0, 3);
+                vehicle.setSteeringValue(0, 0);
+                vehicle.setSteeringValue(0, 1);
+                vehicle.setBrake(0, 2);
+                vehicle.setBrake(0, 3);
+            }
         };
 
+        // 收到按键事件时模拟按键（事件同步模式）
+        multiplayer.onKeyEvent = (key, isDown) => {
+            if (window.simulateKey) {
+                window.simulateKey(key, isDown);
+            }
+        };
+
+        // 收到位置校正时应用（每秒一次）
         multiplayer.onCarStateSync = (state) => {
             if (chassisBody) {
-                chassisBody.position.set(state.pos.x, state.pos.y, state.pos.z);
-                chassisBody.quaternion.set(state.quat.x, state.quat.y, state.quat.z, state.quat.w);
-                chassisBody.velocity.set(state.vel.x, state.vel.y, state.vel.z);
-                chassisBody.angularVelocity.set(state.angVel.x, state.angVel.y, state.angVel.z);
+                // 平滑校正而不是直接覆盖
+                const posError = new THREE.Vector3(
+                    state.pos.x - chassisBody.position.x,
+                    state.pos.y - chassisBody.position.y,
+                    state.pos.z - chassisBody.position.z
+                );
+                // 如果误差超过0.5米，进行校正
+                if (posError.length() > 0.5) {
+                    chassisBody.position.set(state.pos.x, state.pos.y, state.pos.z);
+                    chassisBody.quaternion.set(state.quat.x, state.quat.y, state.quat.z, state.quat.w);
+                    chassisBody.velocity.set(state.vel.x, state.vel.y, state.vel.z);
+                    chassisBody.angularVelocity.set(state.angVel.x, state.angVel.y, state.angVel.z);
+                }
+            }
+        };
+
+        // 场景变化回调（非房主接收）
+        multiplayer.onSceneChange = (sceneInfo) => {
+            if (!currentScene) return; // 还没初始化
+
+            console.log("收到场景切换:", sceneInfo);
+
+            // 检查是否需要切换场景
+            if (sceneInfo.sceneIndex !== currentSceneIndex) {
+                // 清理旧场景
+                if (currentScene) {
+                    currentScene.roadSegments.forEach(seg => {
+                        seg.bodies.forEach(b => world.removeBody(b));
+                        seg.meshes.forEach(m => {
+                            scene.remove(m);
+                            if (m.geometry) m.geometry.dispose();
+                            if (m.material) {
+                                if (Array.isArray(m.material)) {
+                                    m.material.forEach(mat => mat.dispose());
+                                } else {
+                                    m.material.dispose();
+                                }
+                            }
+                        });
+                    });
+                    if (currentScene.waterMeshes) {
+                        currentScene.waterMeshes.forEach(w => {
+                            scene.remove(w);
+                            w.geometry.dispose();
+                            w.material.dispose();
+                        });
+                    }
+                    if (currentScene.dispose) {
+                        currentScene.dispose();
+                    }
+                }
+
+                // 重置车辆
+                chassisBody.position.set(0, 2, -5);
+                chassisBody.velocity.set(0, 0, 0);
+                chassisBody.angularVelocity.set(0, 0, 0);
+                chassisBody.quaternion.set(0, 0, 0, 1);
+
+                // 切换到新场景
+                currentSceneIndex = sceneInfo.sceneIndex;
+                window.syncedLocation = sceneInfo.location;
+                initScene(currentSceneIndex);
+
+                // 重置交通
+                if (traffic) {
+                    traffic.vehicles.forEach(v => v.destroy());
+                    traffic.vehicles = [];
+                    traffic.generateWaypoints(chassisBody.position.z);
+                }
             }
         };
 
@@ -570,12 +648,87 @@
                 animate();
             } else {
                 showRoomMenu();
+                // 初始化大厅
+                await multiplayer.initLobby();
+                multiplayer.onLobbyUpdate = (rooms) => {
+                    window.activeLobbyRooms = rooms;
+                    updateRecentRoomsList();
+                };
             }
         }
 
         function showRoomMenu() {
             document.getElementById('mode-selection').style.display = 'none';
             document.getElementById('room-menu').style.display = 'flex';
+            updateRecentRoomsList();
+        }
+
+        function updateRecentRoomsList() {
+            const container = document.getElementById('room-list-container');
+            const recentRooms = JSON.parse(localStorage.getItem('recentRooms') || '[]');
+            const activeRooms = window.activeLobbyRooms || {};
+
+            let html = '';
+
+            // 1. 显示活跃房间（来自大厅）
+            const activeCodes = Object.keys(activeRooms);
+            if (activeCodes.length > 0) {
+                html += `<div style="font-size: 12px; opacity: 0.6; margin-bottom: 8px; padding-left: 5px;">🌐 正在进行的房间</div>`;
+                activeCodes.forEach(code => {
+                    const room = activeRooms[code];
+                    html += `
+                        <div class="room-item" onclick="joinRoom('${code}')">
+                            <div class="room-info">
+                                <span class="room-name">${code}</span>
+                                <span class="room-players">房主: ${room.host}</span>
+                            </div>
+                            <button class="join-btn">加入</button>
+                        </div>`;
+                });
+            }
+
+            // 2. 显示最近访问（来自本地）
+            const filteredRecent = recentRooms.filter(code => !activeRooms[code]);
+            if (filteredRecent.length > 0) {
+                html += `<div style="font-size: 12px; opacity: 0.6; margin: 15px 0 8px; padding-left: 5px;">🕒 最近访问</div>`;
+                filteredRecent.forEach(code => {
+                    html += `
+                        <div class="room-item" onclick="joinRoom('${code}')">
+                            <div class="room-info">
+                                <span class="room-name">${code}</span>
+                                <span class="room-players">历史记录</span>
+                            </div>
+                            <button class="join-btn">加入</button>
+                        </div>`;
+                });
+            }
+
+            if (html === '') {
+                container.innerHTML = `
+                    <div style="padding: 20px; text-align: center; opacity: 0.6;">
+                        暂无活跃房间<br>
+                        <span style="font-size: 12px;">创建新房间或输入代码加入</span>
+                    </div>`;
+            } else {
+                container.innerHTML = html;
+            }
+
+            // 添加清除历史按钮
+            if (recentRooms.length > 0) {
+                const clearBtn = document.createElement('div');
+                clearBtn.style.textAlign = 'center';
+                clearBtn.style.marginTop = '10px';
+                clearBtn.style.fontSize = '12px';
+                clearBtn.style.opacity = '0.5';
+                clearBtn.style.cursor = 'pointer';
+                clearBtn.textContent = '🗑️ 清除历史记录';
+                clearBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    localStorage.removeItem('recentRooms');
+                    updateRecentRoomsList();
+                };
+                container.appendChild(clearBtn);
+            }
         }
 
         function showModeSelection() {
@@ -586,10 +739,42 @@
         window.joinRoom = async function (roomId) {
             console.log("Joining room:", roomId);
             document.getElementById('start-screen').style.display = 'none';
-            const success = await multiplayer.init();
+            const success = await multiplayer.init(roomId);
             if (success) {
-                init();
-                animate();
+                // 非房主：等待房主的场景信息
+                if (!multiplayer.amIHost()) {
+                    console.log("等待房主场景信息...");
+                    multiplayer.waitForSceneInfo((sceneInfo) => {
+                        if (sceneInfo) {
+                            console.log("收到场景信息:", sceneInfo);
+                            currentSceneIndex = sceneInfo.sceneIndex;
+                            // 如果是 Google 3D 场景，保存位置信息
+                            window.syncedLocation = sceneInfo.location;
+                        }
+                        init();
+                        animate();
+
+                        // 帧同步：等待初始位置同步
+                        const waitForInitialPosition = () => {
+                            const carState = multiplayer.getCarState && multiplayer.getCarState();
+                            if (carState && chassisBody) {
+                                console.log("同步初始位置:", carState.pos);
+                                chassisBody.position.set(carState.pos.x, carState.pos.y, carState.pos.z);
+                                chassisBody.quaternion.set(carState.quat.x, carState.quat.y, carState.quat.z, carState.quat.w);
+                                chassisBody.velocity.set(carState.vel.x, carState.vel.y, carState.vel.z);
+                                chassisBody.angularVelocity.set(carState.angVel.x, carState.angVel.y, carState.angVel.z);
+                            } else {
+                                setTimeout(waitForInitialPosition, 100);
+                            }
+                        };
+                        setTimeout(waitForInitialPosition, 500);
+                    });
+                } else {
+                    init();
+                    animate();
+                    // 房主设置初始场景
+                    multiplayer.setSceneInfo(currentSceneIndex, null);
+                }
             } else {
                 alert("加入失败");
                 showRoomMenu();
@@ -603,6 +788,10 @@
             if (success) {
                 init();
                 animate();
+                // 房主设置初始场景信息
+                if (multiplayer.amIHost()) {
+                    multiplayer.setSceneInfo(currentSceneIndex, null);
+                }
             } else {
                 alert("创建失败");
                 showRoomMenu();
@@ -812,6 +1001,12 @@
 
         // 切换场景
         function switchScene() {
+            // 联机模式下只有房主能切换场景
+            if (isMultiplayer && !multiplayer.amIHost()) {
+                console.log("只有房主可以切换场景");
+                return;
+            }
+
             // 清理旧场景
             if (currentScene) {
                 currentScene.roadSegments.forEach(seg => {
@@ -851,6 +1046,11 @@
             // 创建新场景
             currentSceneIndex = (currentSceneIndex + 1) % SceneList.length;
             initScene(currentSceneIndex);
+
+            // 联机模式下同步场景给其他玩家
+            if (isMultiplayer && multiplayer.amIHost()) {
+                multiplayer.setSceneInfo(currentSceneIndex, null);
+            }
 
             // 重置交通
             if (traffic) {
@@ -1465,6 +1665,20 @@
             traffic = new TrafficManager(world, scene, chassisBody);
             traffic.generateWaypoints(chassisBody.position.z);
 
+            // 多人模式下设置 NPC 同步
+            if (isMultiplayer) {
+                traffic.setMultiplayerMode(true, multiplayer.amIHost());
+
+                // 非房主：接收 NPC 状态
+                if (!multiplayer.amIHost()) {
+                    multiplayer.onNPCStateChange = (states) => {
+                        if (traffic) {
+                            traffic.applyNPCStates(states);
+                        }
+                    };
+                }
+            }
+
             // 创建采样目标点标记（醒目的绿色光球）
             const markerGeo = new THREE.SphereGeometry(1.5, 16, 16);
             const markerMat = new THREE.MeshBasicMaterial({
@@ -1556,6 +1770,7 @@
             });
 
             window.addEventListener('resize', () => {
+                if (!camera || !renderer) return;
                 const container = document.getElementById('game-container');
                 camera.aspect = container.clientWidth / container.clientHeight;
                 camera.updateProjectionMatrix();
@@ -1586,6 +1801,36 @@
             const maxForce = 2500;
             const maxSteer = 0.45;
 
+            // 驾驶控制函数（可被事件同步复用）
+            const applyDriveControl = (key, isDown) => {
+                switch (key) {
+                    case 'w':
+                        vehicle.applyEngineForce(0, 0); vehicle.applyEngineForce(0, 1);
+                        vehicle.applyEngineForce(isDown ? maxForce : 0, 2);
+                        vehicle.applyEngineForce(isDown ? maxForce : 0, 3);
+                        break;
+                    case 's':
+                        vehicle.applyEngineForce(0, 0); vehicle.applyEngineForce(0, 1);
+                        vehicle.applyEngineForce(isDown ? -maxForce : 0, 2);
+                        vehicle.applyEngineForce(isDown ? -maxForce : 0, 3);
+                        break;
+                    case 'a':
+                        vehicle.setSteeringValue(isDown ? maxSteer : 0, 0);
+                        vehicle.setSteeringValue(isDown ? maxSteer : 0, 1);
+                        break;
+                    case 'd':
+                        vehicle.setSteeringValue(isDown ? -maxSteer : 0, 0);
+                        vehicle.setSteeringValue(isDown ? -maxSteer : 0, 1);
+                        break;
+                    case ' ':
+                        vehicle.setBrake(isDown ? 100 : 0, 2);
+                        vehicle.setBrake(isDown ? 100 : 0, 3);
+                        break;
+                }
+            };
+
+            // 暴露给非驾驶员使用
+            window.simulateKey = applyDriveControl;
 
             // 首次交互启动音乐
             if (up && !bgMusic) {
@@ -1621,31 +1866,16 @@
                     }
                     break;
                 case 'w':
-                    if (isMultiplayer && !multiplayer.isDriver()) break;
-                    const f = up ? maxForce : 0;
-                    vehicle.applyEngineForce(0, 0); vehicle.applyEngineForce(0, 1);
-                    vehicle.applyEngineForce(f, 2); vehicle.applyEngineForce(f, 3);
-                    break;
                 case 's':
-                    if (isMultiplayer && !multiplayer.isDriver()) break;
-                    const b = up ? -maxForce : 0;
-                    vehicle.applyEngineForce(0, 0); vehicle.applyEngineForce(0, 1);
-                    vehicle.applyEngineForce(b, 2); vehicle.applyEngineForce(b, 3);
-                    break;
                 case 'a':
-                    if (isMultiplayer && !multiplayer.isDriver()) break;
-                    vehicle.setSteeringValue(up ? maxSteer : 0, 0);
-                    vehicle.setSteeringValue(up ? maxSteer : 0, 1);
-                    break;
                 case 'd':
-                    if (isMultiplayer && !multiplayer.isDriver()) break;
-                    vehicle.setSteeringValue(up ? -maxSteer : 0, 0);
-                    vehicle.setSteeringValue(up ? -maxSteer : 0, 1);
-                    break;
                 case ' ':
                     if (isMultiplayer && !multiplayer.isDriver()) break;
-                    const br = up ? 100 : 0;
-                    vehicle.setBrake(br, 2); vehicle.setBrake(br, 3);
+                    applyDriveControl(e.key.toLowerCase(), up);
+                    // 驾驶员发送按键事件
+                    if (isMultiplayer && multiplayer.isDriver()) {
+                        multiplayer.syncKeyEvent(e.key.toLowerCase(), up);
+                    }
                     break;
                 case 'r':
                     if (up) resetCar();
@@ -1867,6 +2097,9 @@
                     currentScene.updateDynamicGround(chassisBody);
                 }
 
+                // 事件同步模式：按键事件在 handler 中处理
+                // 驾驶员按键时发送事件，非驾驶员收到事件后立即应用
+
                 world.step(1 / 60);
 
                 // --- 核心修改：无限生成触发器 ---
@@ -1885,8 +2118,14 @@
                 }
 
                 // --- Multiplayer Sync ---
-                if (isMultiplayer) {
-                    multiplayer.syncCarState(chassisBody);
+                // 驾驶员广播位置状态用于初始同步和误差校正
+                if (isMultiplayer && multiplayer.isDriver()) {
+                    if (!window.stateSyncCounter) window.stateSyncCounter = 0;
+                    window.stateSyncCounter++;
+                    // 前5秒每帧广播（300帧），之后每秒一次
+                    if (window.stateSyncCounter < 300 || window.stateSyncCounter % 60 === 0) {
+                        multiplayer.sendCarStateSync(chassisBody);
+                    }
                 }
 
                 // --- 小地图更新（每10帧更新一次）---
@@ -1982,9 +2221,9 @@
                     }
                 }
 
+                // 帧同步：所有人都从物理引擎更新视觉
                 visualChassis.position.copy(chassisBody.position);
                 visualChassis.quaternion.copy(chassisBody.quaternion);
-
                 for (let i = 0; i < vehicle.wheelInfos.length; i++) {
                     vehicle.updateWheelTransform(i);
                     const t = vehicle.wheelInfos[i].worldTransform;
@@ -2073,9 +2312,11 @@
 
                 if (traffic) {
                     traffic.update();
-                    // 每3秒打印一次交通状态
-                    if (Date.now() % 3000 < 20) {
-                        // console.log(`[Traffic] 车辆数:${traffic.vehicles.length}, 限制:${traffic.limit}, spawnTimer:${traffic.spawnTimer}, playerZ:${chassisBody.position.z.toFixed(0)}`);
+
+                    // 多人模式：房主每帧广播 NPC 状态
+                    if (isMultiplayer && multiplayer.amIHost()) {
+                        const npcStates = traffic.exportNPCStates();
+                        multiplayer.syncNPCStates(npcStates);
                     }
                 }
             }
@@ -2083,13 +2324,16 @@
         }
 
         window.addEventListener('resize', () => {
+            if (!camera || !renderer) return;
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
-            const m = document.getElementById('mirror-left');
-            mirrorRenderer.setSize(m.clientWidth, m.clientHeight);
-            mirrorCamera.aspect = m.clientWidth / m.clientHeight;
-            mirrorCamera.updateProjectionMatrix();
+            if (mirrorRenderer && mirrorCamera) {
+                const m = document.getElementById('mirror-left');
+                mirrorRenderer.setSize(m.clientWidth, m.clientHeight);
+                mirrorCamera.aspect = m.clientWidth / m.clientHeight;
+                mirrorCamera.updateProjectionMatrix();
+            }
         });
     </script>
 </body>

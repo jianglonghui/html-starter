@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <script src="https://unpkg.com/playroomkit/multiplayer.js"></script>
+</head>
+
+<body>
+    <script>
+        const { insertCoin, setState, getState, onPlayerJoin } = Playroom;
+
+        async function init() {
+            try {
+                await insertCoin({ roomCode: "GLOBAL_LOBBY", skipLobby: true });
+                console.log("Lobby Iframe Initialized");
+
+                // 监听大厅状态变化并通知父窗口
+                setInterval(() => {
+                    const rooms = getState("activeRooms") || {};
+                    window.parent.postMessage({ type: "LOBBY_UPDATE", rooms }, "*");
+                }, 2000);
+
+                // 处理来自父窗口的消息
+                window.addEventListener("message", (event) => {
+                    if (event.data.type === "ADVERTISE_ROOM") {
+                        const { roomCode, hostName } = event.data;
+                        const rooms = getState("activeRooms") || {};
+                        rooms[roomCode] = {
+                            host: hostName,
+                            lastSeen: Date.now()
+                        };
+
+                        // 清理过期房间
+                        const now = Date.now();
+                        const cleaned = {};
+                        for (const code in rooms) {
+                            if (now - rooms[code].lastSeen < 30000) {
+                                cleaned[code] = rooms[code];
+                            }
+                        }
+                        setState("activeRooms", cleaned, true);
+                    }
+                });
+            } catch (e) {
+                console.error("Lobby Iframe failed to initialize", e);
+            }
+        }
+
+        init();
+    </script>
+</body>
+
+</html>

@@ -179,6 +179,9 @@ export class NPCVehicle {
         // 随机车辆类型: 0=轿车, 1=皮卡, 2=货车
         this.vehicleType = Math.floor(Math.random() * 3);
 
+        // 生成车牌号（用于同步）
+        this.plateNumber = generateHKPlateNumber();
+
         // 随机车身颜色
         const bodyColor = new THREE.Color().setHSL(Math.random(), 0.7, 0.45);
         const bodyMat = new THREE.MeshStandardMaterial({ color: bodyColor, metalness: 0.6, roughness: 0.4 });
@@ -230,16 +233,15 @@ export class NPCVehicle {
             this.mesh.add(taillight2);
 
             // 香港车牌
-            const plateNumber = generateHKPlateNumber();
             const frontPlateGeo = new THREE.PlaneGeometry(1.0, 0.3);
-            const frontPlateMat = new THREE.MeshBasicMaterial({ map: createPlateTexture(plateNumber, true), side: THREE.DoubleSide });
+            const frontPlateMat = new THREE.MeshBasicMaterial({ map: createPlateTexture(this.plateNumber, true), side: THREE.DoubleSide });
             const frontPlate = new THREE.Mesh(frontPlateGeo, frontPlateMat);
             frontPlate.position.set(0, 0.25, -2.25);
             frontPlate.rotation.y = Math.PI; // 面向前方
             this.mesh.add(frontPlate);
 
             const rearPlateGeo = new THREE.PlaneGeometry(1.0, 0.3);
-            const rearPlateMat = new THREE.MeshBasicMaterial({ map: createPlateTexture(plateNumber, false), side: THREE.DoubleSide });
+            const rearPlateMat = new THREE.MeshBasicMaterial({ map: createPlateTexture(this.plateNumber, false), side: THREE.DoubleSide });
             const rearPlate = new THREE.Mesh(rearPlateGeo, rearPlateMat);
             rearPlate.position.set(0, 0.25, 2.25);
             // 不旋转，面向后方
@@ -300,16 +302,15 @@ export class NPCVehicle {
             this.mesh.add(bumper);
 
             // 香港车牌
-            const plateNumber = generateHKPlateNumber();
             const frontPlateGeo = new THREE.PlaneGeometry(1.0, 0.3);
-            const frontPlateMat = new THREE.MeshBasicMaterial({ map: createPlateTexture(plateNumber, true), side: THREE.DoubleSide });
+            const frontPlateMat = new THREE.MeshBasicMaterial({ map: createPlateTexture(this.plateNumber, true), side: THREE.DoubleSide });
             const frontPlate = new THREE.Mesh(frontPlateGeo, frontPlateMat);
             frontPlate.position.set(0, 0.3, -2.3);
             frontPlate.rotation.y = Math.PI;
             this.mesh.add(frontPlate);
 
             const rearPlateGeo = new THREE.PlaneGeometry(1.0, 0.3);
-            const rearPlateMat = new THREE.MeshBasicMaterial({ map: createPlateTexture(plateNumber, false), side: THREE.DoubleSide });
+            const rearPlateMat = new THREE.MeshBasicMaterial({ map: createPlateTexture(this.plateNumber, false), side: THREE.DoubleSide });
             const rearPlate = new THREE.Mesh(rearPlateGeo, rearPlateMat);
             rearPlate.position.set(0, 0.3, 2.5);
             this.mesh.add(rearPlate);
@@ -366,16 +367,15 @@ export class NPCVehicle {
             this.mesh.add(taillight2);
 
             // 香港车牌
-            const plateNumber = generateHKPlateNumber();
             const frontPlateGeo = new THREE.PlaneGeometry(1.0, 0.3);
-            const frontPlateMat = new THREE.MeshBasicMaterial({ map: createPlateTexture(plateNumber, true), side: THREE.DoubleSide });
+            const frontPlateMat = new THREE.MeshBasicMaterial({ map: createPlateTexture(this.plateNumber, true), side: THREE.DoubleSide });
             const frontPlate = new THREE.Mesh(frontPlateGeo, frontPlateMat);
             frontPlate.position.set(0, 0.25, -2.25);
             frontPlate.rotation.y = Math.PI;
             this.mesh.add(frontPlate);
 
             const rearPlateGeo = new THREE.PlaneGeometry(1.0, 0.3);
-            const rearPlateMat = new THREE.MeshBasicMaterial({ map: createPlateTexture(plateNumber, false), side: THREE.DoubleSide });
+            const rearPlateMat = new THREE.MeshBasicMaterial({ map: createPlateTexture(this.plateNumber, false), side: THREE.DoubleSide });
             const rearPlate = new THREE.Mesh(rearPlateGeo, rearPlateMat);
             rearPlate.position.set(0, 0.25, 2.55);
             this.mesh.add(rearPlate);
@@ -673,6 +673,138 @@ export class NPCVehicle {
     }
 }
 
+/**
+ * 傀儡 NPC - 非房主使用，只有视觉没有物理模拟
+ */
+export class GhostNPC {
+    constructor(id, scene) {
+        this.id = id;
+        this.scene = scene;
+        this.mesh = null;
+        this.visualWheels = [];
+        this.vehicleType = 0;
+    }
+
+    // 根据同步数据创建/更新视觉
+    updateFromState(state) {
+        if (!this.mesh) {
+            this.createVisual(state.vehicleType, state.bodyColor, state.plateNumber);
+        }
+
+        // 直接设置位置和旋转（实时同步）
+        if (this.mesh) {
+            this.mesh.position.set(state.pos.x, state.pos.y, state.pos.z);
+            this.mesh.quaternion.set(state.quat.x, state.quat.y, state.quat.z, state.quat.w);
+
+            // 根据车身计算轮子位置
+            const wheelOffsets = [
+                [-1.1, -0.2, -1.4], [1.1, -0.2, -1.4],
+                [-1.1, -0.2, 1.4],  [1.1, -0.2, 1.4]
+            ];
+            for (let i = 0; i < 4; i++) {
+                const offset = new THREE.Vector3(...wheelOffsets[i]).multiplyScalar(1.3);
+                offset.applyQuaternion(this.mesh.quaternion);
+                this.visualWheels[i].position.copy(this.mesh.position).add(offset);
+                this.visualWheels[i].quaternion.copy(this.mesh.quaternion);
+            }
+        }
+    }
+
+    createVisual(vehicleType, bodyColorHex, plateNumber) {
+        this.vehicleType = vehicleType;
+        this.mesh = new THREE.Group();
+        this.mesh.scale.set(1.3, 1.3, 1.3);
+
+        const bodyColor = new THREE.Color(bodyColorHex);
+        const bodyMat = new THREE.MeshStandardMaterial({ color: bodyColor, metalness: 0.6, roughness: 0.4 });
+        const glassMat = new THREE.MeshStandardMaterial({ color: 0x88aacc, metalness: 0.9, roughness: 0.1, transparent: true, opacity: 0.6 });
+
+        if (vehicleType === 0) {
+            // 轿车
+            const body = new THREE.Mesh(new THREE.BoxGeometry(2, 0.5, 4.4), bodyMat);
+            body.position.y = 0.3;
+            this.mesh.add(body);
+            const roof = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.45, 2.2), bodyMat);
+            roof.position.set(0, 0.75, 0.3);
+            this.mesh.add(roof);
+            const frontGlass = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.4, 0.6), glassMat);
+            frontGlass.position.set(0, 0.65, -0.6);
+            frontGlass.rotation.x = -0.4;
+            this.mesh.add(frontGlass);
+        } else if (vehicleType === 1) {
+            // 皮卡
+            const frontBody = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.6, 2.2), bodyMat);
+            frontBody.position.set(0, 0.35, -1.1);
+            this.mesh.add(frontBody);
+            const cabin = new THREE.Mesh(new THREE.BoxGeometry(2, 0.7, 1.6), bodyMat);
+            cabin.position.set(0, 0.85, -0.2);
+            this.mesh.add(cabin);
+            const bedFloor = new THREE.Mesh(new THREE.BoxGeometry(2, 0.15, 2.4), bodyMat);
+            bedFloor.position.set(0, 0.4, 1.3);
+            this.mesh.add(bedFloor);
+        } else {
+            // 货车
+            const truckHead = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.9, 1.8), bodyMat);
+            truckHead.position.set(0, 0.5, -1.3);
+            this.mesh.add(truckHead);
+            const cargoMat = new THREE.MeshStandardMaterial({ color: 0xeeeeee, metalness: 0.2, roughness: 0.7 });
+            const cargo = new THREE.Mesh(new THREE.BoxGeometry(2.3, 1.8, 3.2), cargoMat);
+            cargo.position.set(0, 1.0, 0.9);
+            this.mesh.add(cargo);
+        }
+
+        // 添加车牌
+        if (plateNumber) {
+            const frontPlateGeo = new THREE.PlaneGeometry(1.0, 0.3);
+            const frontPlateMat = new THREE.MeshBasicMaterial({
+                map: createPlateTexture(this.plateNumber, true),
+                side: THREE.DoubleSide
+            });
+            const frontPlate = new THREE.Mesh(frontPlateGeo, frontPlateMat);
+            frontPlate.position.set(0, 0.25, -2.25);
+            frontPlate.rotation.y = Math.PI;
+            this.mesh.add(frontPlate);
+
+            const rearPlateGeo = new THREE.PlaneGeometry(1.0, 0.3);
+            const rearPlateMat = new THREE.MeshBasicMaterial({
+                map: createPlateTexture(this.plateNumber, false),
+                side: THREE.DoubleSide
+            });
+            const rearPlate = new THREE.Mesh(rearPlateGeo, rearPlateMat);
+            rearPlate.position.set(0, 0.25, 2.25);
+            this.mesh.add(rearPlate);
+        }
+
+        this.scene.add(this.mesh);
+
+        // 创建轮子
+        const wheelGeo = new THREE.CylinderGeometry(0.45, 0.45, 0.4, 16).rotateZ(Math.PI/2);
+        const wheelMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
+        for (let i = 0; i < 4; i++) {
+            const w = new THREE.Mesh(wheelGeo, wheelMat);
+            this.scene.add(w);
+            this.visualWheels.push(w);
+        }
+    }
+
+    destroy() {
+        if (this.mesh) {
+            this.mesh.traverse(child => {
+                if (child.isMesh) {
+                    if (child.geometry) child.geometry.dispose();
+                    if (child.material) child.material.dispose();
+                }
+            });
+            this.scene.remove(this.mesh);
+        }
+        this.visualWheels.forEach(w => {
+            w.geometry.dispose();
+            w.material.dispose();
+            this.scene.remove(w);
+        });
+    }
+}
+
 export class TrafficManager {
     constructor(world, scene, playerBody) {
         this.world = world;
@@ -681,14 +813,36 @@ export class TrafficManager {
         this.vehicles = [];
         this.waypoints = [];
         this.lastWaypointZ = 0;
-        
+
         this.limit = 6;             // 最大车数
         this.minSpacing = 50;       // 安全间距
-        this.spawnTimer = 0;        
-        this.spawnInterval = 90;    
+        this.spawnTimer = 0;
+        this.spawnInterval = 90;
+
+        // 多人模式
+        this.isMultiplayer = false;
+        this.isHost = false;
+        this.ghostVehicles = new Map(); // 非房主的傀儡车辆
+    }
+
+    // 设置多人模式
+    setMultiplayerMode(isMultiplayer, isHost) {
+        this.isMultiplayer = isMultiplayer;
+        this.isHost = isHost;
+
+        // 非房主清除本地物理 NPC
+        if (isMultiplayer && !isHost) {
+            this.vehicles.forEach(v => v.destroy());
+            this.vehicles = [];
+        }
     }
 
     update() {
+        // 非房主在多人模式下不运行物理模拟
+        if (this.isMultiplayer && !this.isHost) {
+            return;
+        }
+
         const playerZ = this.playerBody.position.z;
 
         // 维护路点池
@@ -704,12 +858,13 @@ export class TrafficManager {
                 const potentialLane = Math.random() > 0.5 ? 3.5 : -3.5;
 
                 const safe = this.isAreaSafe(potentialZ, potentialLane);
-                //console.log(`[Spawn尝试] potentialZ=${potentialZ.toFixed(0)}, lane=${potentialLane}, safe=${safe}`);
 
                 if (safe) {
-                    this.vehicles.push(new NPCVehicle(potentialZ, potentialLane, this.world, this.scene));
+                    const npc = new NPCVehicle(potentialZ, potentialLane, this.world, this.scene);
+                    npc.uid = Date.now() + '_' + Math.random().toString(36).substr(2, 9); // 唯一ID
+                    npc.bodyColorHex = npc.mesh.children[0]?.material?.color?.getHex() || 0x888888;
+                    this.vehicles.push(npc);
                     this.spawnTimer = 0;
-                    //console.log(`[Spawn成功] 新车生成于 Z=${potentialZ.toFixed(0)}`);
                 }
             }
         }
@@ -728,6 +883,51 @@ export class TrafficManager {
         }
 
         this.analyzeTraffic();
+    }
+
+    // 房主导出 NPC 状态用于同步
+    exportNPCStates() {
+        return this.vehicles.map(v => ({
+            id: v.uid,
+            vehicleType: v.vehicleType,
+            bodyColor: v.bodyColorHex,
+            plateNumber: v.plateNumber,
+            pos: { x: v.chassisBody.position.x, y: v.chassisBody.position.y, z: v.chassisBody.position.z },
+            quat: { x: v.chassisBody.quaternion.x, y: v.chassisBody.quaternion.y, z: v.chassisBody.quaternion.z, w: v.chassisBody.quaternion.w }
+        }));
+    }
+
+    // 非房主接收并更新傀儡 NPC
+    applyNPCStates(states) {
+        if (!this.isMultiplayer || this.isHost) return;
+
+        const currentIds = new Set(states.map(s => s.id));
+
+        // 删除不存在的傀儡
+        for (const [id, ghost] of this.ghostVehicles) {
+            if (!currentIds.has(id)) {
+                ghost.destroy();
+                this.ghostVehicles.delete(id);
+            }
+        }
+
+        // 更新或创建傀儡
+        for (const state of states) {
+            let ghost = this.ghostVehicles.get(state.id);
+            if (!ghost) {
+                ghost = new GhostNPC(state.id, this.scene);
+                this.ghostVehicles.set(state.id, ghost);
+            }
+            ghost.updateFromState(state);
+        }
+    }
+
+    // 清理所有傀儡
+    clearGhosts() {
+        for (const ghost of this.ghostVehicles.values()) {
+            ghost.destroy();
+        }
+        this.ghostVehicles.clear();
     }
 
     isAreaSafe(z, lane) {
