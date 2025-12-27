@@ -2,9 +2,91 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { BaseScene } from './BaseScene.js';
 import { TilesRenderer } from 'https://esm.sh/3d-tiles-renderer@0.4.19';
-import { GoogleCloudAuthPlugin } from 'https://esm.sh/3d-tiles-renderer@0.4.19/plugins';
 import { GLTFLoader } from 'https://unpkg.com/three@0.160.0/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'https://unpkg.com/three@0.160.0/examples/jsm/loaders/DRACOLoader.js';
+
+// 代理服务器地址
+const TILES_PROXY_URL = 'http://localhost:8000/api/tiles';
+
+/**
+ * 自定义代理插件 - 替代 GoogleCloudAuthPlugin
+ * 所有请求通过服务器代理，API Key 不暴露在客户端
+ */
+class ProxyAuthPlugin {
+    constructor() {
+        this.name = 'PROXY_AUTH_PLUGIN';
+        this.tiles = null;
+        this.session = null;  // 跟踪 session token
+    }
+
+    init(tiles) {
+        this.tiles = tiles;
+        // 设置根 tileset URL（通过代理）
+        tiles.rootURL = `${TILES_PROXY_URL}/v1/3dtiles/root.json`;
+
+        // 设置 preprocessURL 回调来重写所有 URL
+        tiles.preprocessURL = (uri) => this.preprocessURL(uri);
+    }
+
+    // 重写所有 tile URL，使其通过代理，并追加 session
+    preprocessURL(uri) {
+        if (!uri) return uri;
+
+        const uriStr = typeof uri === 'string' ? uri : uri.toString();
+
+        try {
+            const url = new URL(uriStr, window.location.origin);
+            let pathname = url.pathname;
+
+            // 从 URL 中提取 session（如果有的话，保存下来）
+            if (url.searchParams.has('session')) {
+                this.session = url.searchParams.get('session');
+            }
+
+            // 确保路径通过代理
+            if (!pathname.startsWith('/api/tiles/')) {
+                if (pathname.startsWith('/v1/')) {
+                    pathname = '/api/tiles' + pathname;
+                } else if (url.hostname === 'tile.googleapis.com') {
+                    pathname = '/api/tiles' + url.pathname;
+                }
+            }
+
+            // 构建最终 URL（使用代理服务器地址，不是页面地址）
+            const finalUrl = new URL(pathname, TILES_PROXY_URL);
+
+            // 复制原有参数（除了 key）
+            url.searchParams.forEach((value, key) => {
+                if (key !== 'key') {
+                    finalUrl.searchParams.set(key, value);
+                }
+            });
+
+            // 如果没有 session 但我们有缓存的 session，追加它
+            if (!finalUrl.searchParams.has('session') && this.session) {
+                finalUrl.searchParams.set('session', this.session);
+            }
+
+            return finalUrl.toString();
+        } catch (e) {
+            // 相对路径回退处理
+            let result = uriStr.startsWith('/')
+                ? `${TILES_PROXY_URL}${uriStr}`
+                : `${TILES_PROXY_URL}/${uriStr}`;
+
+            // 追加 session
+            if (this.session && !result.includes('session=')) {
+                result += (result.includes('?') ? '&' : '?') + `session=${this.session}`;
+            }
+            return result;
+        }
+    }
+
+    dispose() {
+        this.tiles = null;
+        this.session = null;
+    }
+}
 
 /**
  * Google Photorealistic 3D Tiles 场景
@@ -21,8 +103,7 @@ export class Google3DTiles extends BaseScene {
         this.centerLng = -122.4194;
         this.centerAlt = 10; // 地面上10米
 
-        // API Key - 需要用户配置
-        this.apiKey = window.GOOGLE_TILES_API_KEY || '';
+        // API Key 已移至服务器代理，客户端不再需要
 
         // 创建一个容器用于ECEF->ENU变换
         this.tilesContainer = new THREE.Group();
@@ -31,12 +112,8 @@ export class Google3DTiles extends BaseScene {
         // 先创建固定的物理地面，让车辆可以正常生成
         this.createPhysicsGround();
 
-        if (this.apiKey) {
-            this.init3DTiles();
-        } else {
-            console.warn('Google 3D Tiles: 请设置 window.GOOGLE_TILES_API_KEY');
-            this.createFallbackGround();
-        }
+        // API Key 在服务器代理，直接加载
+        this.init3DTiles();
     }
 
     /**
@@ -239,14 +316,11 @@ export class Google3DTiles extends BaseScene {
     }
 
     init3DTiles() {
-        // 使用 Google Cloud Auth Plugin 处理认证
+        // 使用代理插件（API Key 在服务器端，客户端不暴露）
         this.tilesRenderer = new TilesRenderer();
 
-        // 注册 Google Cloud 认证插件
-        this.tilesRenderer.registerPlugin(new GoogleCloudAuthPlugin({
-            apiToken: this.apiKey,
-            autoRefreshToken: true
-        }));
+        // 注册代理认证插件
+        this.tilesRenderer.registerPlugin(new ProxyAuthPlugin());
 
         // 配置 GLTF 加载器
         const dracoLoader = new DRACOLoader();
@@ -297,10 +371,12 @@ export class Google3DTiles extends BaseScene {
             const rotatedEcef = ecef.clone().applyMatrix4(rotMatrix);
             group.position.set(-rotatedEcef.x, -rotatedEcef.y, -rotatedEcef.z);
 
-            console.log('已应用ENU变换，等待初始地面检测...');
+            console.log('已应用ENU变换，开始地面检测...');
 
-            // 初始化：把城市整体抬到正确位置（只执行一次）
-            setTimeout(() => this.adjustGroundHeight(), 2000);
+            // 初始化：持续检测直到地面位置稳定
+            this.lastGroundY = null;
+            this.stableCount = 0;
+            this.startGroundDetection();
         });
 
         this.tilesRenderer.addEventListener('load-model', (e) => {
@@ -318,33 +394,56 @@ export class Google3DTiles extends BaseScene {
     }
 
     /**
-     * 调整 tiles 位置，让视觉地面对齐物理地面（Y=0）
+     * 开始地面检测循环，直到检测结果稳定
      */
-    adjustGroundHeight() {
+    startGroundDetection() {
         if (this.groundAdjusted) return;
         if (!this.tilesRenderer || !this.tilesRenderer.group) return;
 
-        // 从原点上方往下发射射线
         const raycaster = new THREE.Raycaster();
-        raycaster.set(new THREE.Vector3(0, 100, 0), new THREE.Vector3(0, -1, 0));
-        raycaster.far = 500;
+        raycaster.set(new THREE.Vector3(0, 500, 0), new THREE.Vector3(0, -1, 0));
+        raycaster.far = 1500;
 
         const intersects = raycaster.intersectObject(this.tilesRenderer.group, true);
 
         if (intersects.length > 0) {
             const groundY = intersects[0].point.y;
-            // 让视觉地面对齐到 Y=0（物理地面顶面位置）
-            const offset = -groundY;
-            this.tilesRenderer.group.position.y += offset;
-            this.baseGroundOffset = this.tilesRenderer.group.position.y; // 记录初始偏移作为基准
-            this.groundAdjusted = true;
-            // 对齐完成，显示 tiles
-            this.tilesRenderer.group.visible = true;
-            console.log(`Tiles已对齐并显示！偏移=${offset.toFixed(1)}米, 基准=${this.baseGroundOffset.toFixed(1)}`);
+
+            // 检查是否稳定（与上次检测结果接近）
+            if (this.lastGroundY !== null && Math.abs(groundY - this.lastGroundY) < 1) {
+                this.stableCount++;
+                console.log(`地面检测: Y=${groundY.toFixed(1)}, 稳定次数=${this.stableCount}`);
+
+                // 连续 3 次稳定才确认
+                if (this.stableCount >= 3) {
+                    this.applyGroundOffset(groundY);
+                    return;
+                }
+            } else {
+                // 不稳定，重置计数
+                this.stableCount = 0;
+                console.log(`地面检测: Y=${groundY.toFixed(1)}, 等待稳定...`);
+            }
+
+            this.lastGroundY = groundY;
         } else {
-            console.log('等待tiles加载...');
-            setTimeout(() => this.adjustGroundHeight(), 1000);
+            console.log('地面检测: 未检测到，继续等待...');
         }
+
+        // 继续检测
+        setTimeout(() => this.startGroundDetection(), 500);
+    }
+
+    /**
+     * 应用地面偏移
+     */
+    applyGroundOffset(groundY) {
+        const offset = -groundY;
+        this.tilesRenderer.group.position.y += offset;
+        this.baseGroundOffset = this.tilesRenderer.group.position.y;
+        this.groundAdjusted = true;
+        this.tilesRenderer.group.visible = true;
+        console.log(`Tiles已对齐并显示！地面Y=${groundY.toFixed(1)}, 偏移=${offset.toFixed(1)}`);
     }
 
     /**

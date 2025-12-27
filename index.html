@@ -191,26 +191,10 @@
             }
         }
 
-        /* Google Places 自动补全下拉框样式 */
-        .pac-container {
-            z-index: 10000 !important;
-            border-radius: 8px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-            border: none;
-            margin-top: 4px;
-        }
-
-        .pac-item {
-            padding: 8px 12px;
-            cursor: pointer;
-        }
-
-        .pac-item:hover {
-            background: #f0f0f0;
-        }
-
-        .pac-item-query {
-            font-size: 14px;
+        /* Leaflet marker 样式 */
+        .car-marker {
+            background: none !important;
+            border: none !important;
         }
 
         /* Start Screen Styles */
@@ -357,6 +341,7 @@
             text-decoration: underline;
         }
     </style>
+    <!-- Google Static Maps 通过后端代理，无需前端 JS 库 -->
     <script type="importmap">
         {
             "imports": {
@@ -374,13 +359,7 @@
     <!-- API 配置文件 -->
     <script src="config.js"></script>
 
-    <!-- Google Maps Places API -->
-    <script>
-        (g => { var h, a, k, p = "The Google Maps JavaScript API", c = "google", l = "importLibrary", q = "__ib__", m = document, b = window; b = b[c] || (b[c] = {}); var d = b.maps || (b.maps = {}), r = new Set, e = new URLSearchParams, u = () => h || (h = new Promise(async (f, n) => { await (a = m.createElement("script")); e.set("libraries", [...r]); for (k in g) e.set(k.replace(/[A-Z]/g, t => "_" + t[0].toLowerCase()), g[k]); e.set("callback", c + ".maps." + q); a.src = `https://maps.${c}apis.com/maps/api/js?` + e; d[q] = f; a.onerror = () => h = n(Error(p + " could not load.")); a.nonce = m.querySelector("script[nonce]")?.nonce || ""; m.head.append(a) })); d[l] ? console.warn(p + " only loads once. Ignoring:", g) : d[l] = (f, ...n) => r.add(f) && u().then(() => d[l](f, ...n)) })({
-            key: window.CONFIG?.GOOGLE_API_KEY || '',
-            v: "beta"
-        });
-    </script>
+    <!-- Google API 已移至后端代理 -->
 
 
 
@@ -419,10 +398,10 @@
 
     <!-- 地址搜索框（仅在 Google 3D 场景显示） -->
     <div id="location-search" style="display: none; position: absolute; top: 10px; right: 10px; z-index: 100;">
-        <div
-            style="background: rgba(255,255,255,0.95); border-radius: 8px; padding: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); width: 280px;">
-            <input type="text" id="address-input" placeholder="输入地址搜索..."
+        <div style="background: rgba(255,255,255,0.95); border-radius: 8px; padding: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); width: 280px; position: relative;">
+            <input type="text" id="address-input" placeholder="输入地址搜索..." autocomplete="off"
                 style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box;" />
+            <div id="autocomplete-dropdown" style="display: none; position: absolute; top: 100%; left: 0; right: 0; background: white; border-radius: 0 0 8px 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.2); max-height: 200px; overflow-y: auto; z-index: 1000;"></div>
             <div id="search-status" style="font-size: 11px; color: #666; margin-top: 4px; padding: 0 4px;"></div>
         </div>
     </div>
@@ -499,11 +478,10 @@
         const multiplayer = new MultiplayerManager();
         let isMultiplayer = false;
 
-        // Google 3D Tiles API Key (从 config.js 读取)
-        window.GOOGLE_TILES_API_KEY = window.CONFIG?.GOOGLE_API_KEY || '';
+        // API Key 已移至服务器代理，客户端不再暴露任何 Key
 
-        // 照片增强器
-        const photoEnhancer = new PhotoEnhancer(window.CONFIG?.GOOGLE_API_KEY || '');
+        // 照片增强器（传入你的服务器地址，同域部署可留空）
+        const photoEnhancer = new PhotoEnhancer('http://localhost:8000');
 
         let orbitControls;
 
@@ -880,63 +858,119 @@
             }
         }
 
-        // 初始化 Google Places 自动补全
+        // 地址搜索自动补全（使用服务器代理）
+        const API_SERVER = 'http://localhost:8000';
         let placesInitialized = false;
+        let autocompleteTimeout = null;
+
         async function initPlacesAutocomplete() {
             if (placesInitialized) return;
 
-            try {
-                const { Autocomplete } = await google.maps.importLibrary("places");
+            const input = document.getElementById('address-input');
+            const dropdown = document.getElementById('autocomplete-dropdown');
+            const statusEl = document.getElementById('search-status');
 
-                const input = document.getElementById('address-input');
-                const statusEl = document.getElementById('search-status');
+            // 输入事件 - 防抖搜索
+            input.addEventListener('input', () => {
+                clearTimeout(autocompleteTimeout);
+                const query = input.value.trim();
 
-                const autocomplete = new Autocomplete(input, {
-                    fields: ['geometry', 'formatted_address', 'name']
-                });
+                if (query.length < 2) {
+                    dropdown.style.display = 'none';
+                    return;
+                }
 
-                autocomplete.addListener('place_changed', () => {
-                    const place = autocomplete.getPlace();
-                    if (place.geometry?.location) {
-                        const lat = place.geometry.location.lat();
-                        const lng = place.geometry.location.lng();
-                        const name = place.name || place.formatted_address;
+                autocompleteTimeout = setTimeout(async () => {
+                    try {
+                        const resp = await fetch(`${API_SERVER}/api/places/autocomplete`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ input: query })
+                        });
+                        const data = await resp.json();
 
-                        statusEl.textContent = `正在加载: ${name}`;
-                        statusEl.style.color = '#0066cc';
+                        if (data.suggestions?.length > 0) {
+                            dropdown.innerHTML = data.suggestions.map(s => `
+                                <div class="autocomplete-item" data-place-id="${s.place_id}"
+                                     style="padding: 10px 12px; cursor: pointer; border-bottom: 1px solid #eee;">
+                                    <div style="font-size: 14px; color: #333;">${s.main_text}</div>
+                                    <div style="font-size: 12px; color: #888;">${s.secondary_text}</div>
+                                </div>
+                            `).join('');
+                            dropdown.style.display = 'block';
+
+                            // 点击选项
+                            dropdown.querySelectorAll('.autocomplete-item').forEach(item => {
+                                item.addEventListener('click', () => selectPlace(item.dataset.placeId));
+                                item.addEventListener('mouseenter', () => item.style.background = '#f5f5f5');
+                                item.addEventListener('mouseleave', () => item.style.background = 'white');
+                            });
+                        } else {
+                            dropdown.style.display = 'none';
+                        }
+                    } catch (err) {
+                        console.error('搜索失败:', err);
+                    }
+                }, 300);
+            });
+
+            // 点击外部关闭下拉框
+            document.addEventListener('click', (e) => {
+                if (!e.target.closest('#location-search')) {
+                    dropdown.style.display = 'none';
+                }
+            });
+
+            // 选择地点
+            async function selectPlace(placeId) {
+                dropdown.style.display = 'none';
+                statusEl.textContent = '加载中...';
+                statusEl.style.color = '#0066cc';
+
+                try {
+                    const resp = await fetch(`${API_SERVER}/api/places/details`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ place_id: placeId })
+                    });
+                    const place = await resp.json();
+
+                    if (place.lat && place.lng) {
+                        input.value = place.name || place.address;
+                        statusEl.textContent = `正在加载: ${place.name}`;
 
                         if (currentScene && currentScene.setLocation) {
-                            currentScene.setLocation(lat, lng, name);
+                            currentScene.setLocation(place.lat, place.lng, place.name);
                             setTimeout(() => {
-                                statusEl.textContent = `✓ ${name}`;
+                                statusEl.textContent = `✓ ${place.name}`;
                                 statusEl.style.color = '#00aa00';
                             }, 2000);
                         }
                     }
-                });
-
-                placesInitialized = true;
-                console.log('📍 地址搜索已启用');
-
-            } catch (err) {
-                console.error('Places API 加载失败:', err);
+                } catch (err) {
+                    console.error('获取地点详情失败:', err);
+                    statusEl.textContent = '加载失败';
+                    statusEl.style.color = '#cc0000';
+                }
             }
+
+            placesInitialized = true;
+            console.log('📍 地址搜索已启用 (服务器代理)');
         }
 
-        // 初始化小地图
-        let minimapInstance = null;
-        let minimapMarker = null;
+        // 初始化小地图 (Google Static Maps API via 后端代理)
+        const STATIC_MAP_API = 'http://localhost:8000/api/staticmap';
         let minimapInitialized = false;
         let minimapCounter = 0;
+        let lastMinimapLat = 0;
+        let lastMinimapLng = 0;
 
-        async function initMinimap() {
-            if (minimapInitialized && minimapInstance) {
-                // 已初始化，只需更新中心点
+        function initMinimap() {
+            if (minimapInitialized) {
                 updateMinimapCenter();
                 return;
             }
 
-            // 确保场景已加载且有 getCenter 方法
             if (!currentScene || typeof currentScene.getCenter !== 'function') {
                 console.log('等待场景加载...');
                 setTimeout(initMinimap, 500);
@@ -944,78 +978,83 @@
             }
 
             try {
-                const { Map } = await google.maps.importLibrary("maps");
                 const center = currentScene.getCenter();
                 const mapEl = document.getElementById('minimap');
 
-                minimapInstance = new Map(mapEl, {
-                    center: center,
-                    zoom: 17,
-                    disableDefaultUI: true,
-                    gestureHandling: 'none',
-                    mapTypeId: 'roadmap'
-                });
+                // 创建静态地图图片元素
+                mapEl.innerHTML = `
+                    <img id="minimap-img"
+                         style="width: 100%; height: 100%; object-fit: cover; border-radius: 8px;"
+                         alt="minimap" />
+                    <div id="minimap-arrow" style="
+                        position: absolute;
+                        top: 50%;
+                        left: 50%;
+                        transform: translate(-50%, -50%) rotate(0deg);
+                        z-index: 10;
+                    ">
+                        <svg width="24" height="24" viewBox="0 0 24 24">
+                            <path d="M12 2 L20 20 L12 16 L4 20 Z" fill="#ff3300" stroke="#fff" stroke-width="2"/>
+                        </svg>
+                    </div>
+                `;
+                mapEl.style.position = 'relative';
 
-                // 使用 Symbol 标记（箭头，不需要 Map ID）
-                minimapMarker = new google.maps.Marker({
-                    position: center,
-                    map: minimapInstance,
-                    icon: {
-                        path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-                        scale: 5,
-                        fillColor: '#ff3300',
-                        fillOpacity: 1,
-                        strokeColor: '#ffffff',
-                        strokeWeight: 2,
-                        rotation: 0
-                    }
-                });
+                // 初始加载地图
+                updateStaticMap(center.lat, center.lng);
 
                 // 监听位置变更事件
                 window.addEventListener('locationChanged', (e) => {
                     const { lat, lng } = e.detail;
-                    minimapInstance.setCenter({ lat, lng });
-                    minimapMarker.setPosition({ lat, lng });
+                    updateStaticMap(lat, lng);
                 });
 
                 minimapInitialized = true;
-                console.log('🗺️ 小地图已启用');
+                console.log('🗺️ 小地图已启用 (Google Static Maps)');
 
             } catch (err) {
                 console.error('小地图初始化失败:', err);
             }
         }
 
-        function updateMinimapCenter() {
-            if (!minimapInstance || !currentScene || !currentScene.getCenter) return;
-            const center = currentScene.getCenter();
-            minimapInstance.setCenter(center);
-            if (minimapMarker) {
-                minimapMarker.setPosition(center);
+        function updateStaticMap(lat, lng) {
+            // 避免频繁请求 - 位置变化超过一定阈值才更新
+            const threshold = 0.0001; // 约 10 米
+            if (Math.abs(lat - lastMinimapLat) < threshold && Math.abs(lng - lastMinimapLng) < threshold) {
+                return;
+            }
+            lastMinimapLat = lat;
+            lastMinimapLng = lng;
+
+            const img = document.getElementById('minimap-img');
+            if (img) {
+                img.src = `${STATIC_MAP_API}?lat=${lat}&lng=${lng}&zoom=17&width=300&height=180`;
             }
         }
 
+        function updateMinimapCenter() {
+            if (!currentScene || !currentScene.getCenter) return;
+            const center = currentScene.getCenter();
+            updateStaticMap(center.lat, center.lng);
+        }
+
         function updateMinimap() {
-            if (!minimapInstance || !minimapMarker || !currentScene || !currentScene.localToLatLng) return;
+            if (!minimapInitialized || !currentScene || !currentScene.localToLatLng) return;
 
             const pos = chassisBody.position;
             const carLatLng = currentScene.localToLatLng(pos.x, pos.z);
 
-            // 更新标记位置
-            minimapMarker.setPosition(carLatLng);
-
-            // 让地图跟随车辆
-            minimapInstance.panTo(carLatLng);
+            // 更新静态地图位置
+            updateStaticMap(carLatLng.lat, carLatLng.lng);
 
             // 更新车辆朝向（基于速度方向）
             const vel = chassisBody.velocity;
             if (vel.length() > 1) {
                 const heading = Math.atan2(vel.x, -vel.z) * (180 / Math.PI);
                 // 更新箭头旋转
-                const icon = minimapMarker.getIcon();
-                if (icon) {
-                    icon.rotation = heading;
-                    minimapMarker.setIcon(icon);
+                const arrow = document.getElementById('minimap-arrow');
+                if (arrow) {
+                    arrow.style.transform = `translate(-50%, -50%) rotate(${heading}deg)`;
                 }
             }
         }
@@ -1829,13 +1868,11 @@
         }
 
         function handler(e) {
-            // 如果焦点在输入框或自动补全组件，忽略游戏快捷键
+            // 如果焦点在输入框，忽略游戏快捷键
             const activeEl = document.activeElement;
             if (activeEl && (
                 activeEl.tagName === 'INPUT' ||
-                activeEl.tagName === 'TEXTAREA' ||
-                activeEl.tagName === 'GMP-PLACE-AUTOCOMPLETE' ||
-                activeEl.closest('gmp-place-autocomplete')
+                activeEl.tagName === 'TEXTAREA'
             )) {
                 return;
             }

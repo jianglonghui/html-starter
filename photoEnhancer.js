@@ -1,13 +1,13 @@
 /**
  * photoEnhancer.js
- * 使用 Gemini API 将游戏截图转换为真实街景风格
+ * 使用后端代理调用 Gemini API 将游戏截图转换为真实街景风格
  */
 
 export class PhotoEnhancer {
-    constructor(apiKey) {
-        this.apiKey = apiKey;
-        this.modelId = 'gemini-3-pro-image-preview';
-        this.endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${this.modelId}:generateContent`;
+    constructor(serverUrl = null) {
+        // 服务器地址，null 则使用相对路径（同域部署）
+        this.serverUrl = serverUrl || '';
+        this.endpoint = `${this.serverUrl}/api/enhance`;
     }
 
     /**
@@ -31,42 +31,20 @@ export class PhotoEnhancer {
      * @returns {Promise<Blob>} - 增强后的图片 Blob
      */
     async enhance(imageBlob) {
-        if (!this.apiKey || this.apiKey === 'YOUR_GOOGLE_API_KEY_HERE') {
-            console.warn('[PhotoEnhancer] API Key 未配置，跳过增强');
-            return null;
-        }
-
         console.log('[PhotoEnhancer] 开始增强处理...');
 
         const base64Image = await this.blobToBase64(imageBlob);
 
-        const requestBody = {
-            contents: [{
-                role: "user",
-                parts: [
-                    {
-                        inline_data: {
-                            mime_type: "image/png",
-                            data: base64Image
-                        }
-                    },
-                    {
-                        text: "Transform this 3D game screenshot into a photorealistic street photograph. Keep the same composition, perspective, and scene elements, but make it look like a real photo taken with a camera. Add realistic lighting, textures, weather effects, and natural imperfections. Output only the enhanced image."
-                    }
-                ]
-            }],
-            generationConfig: {
-                responseModalities: ["IMAGE", "TEXT"]
-            }
-        };
-
         try {
-            const response = await fetch(`${this.endpoint}?key=${this.apiKey}`, {
+            const response = await fetch(this.endpoint, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(requestBody)
+                body: JSON.stringify({
+                    image_base64: base64Image,
+                    mime_type: imageBlob.type || 'image/png'
+                })
             });
 
             if (!response.ok) {
@@ -76,38 +54,21 @@ export class PhotoEnhancer {
 
             const data = await response.json();
 
-            // 解析响应，提取图片
-            const candidates = data.candidates;
-            if (!candidates || candidates.length === 0) {
-                throw new Error('API 未返回结果');
+            // 服务器返回 { image_base64, mime_type }
+            const imageData = data.image_base64;
+            const mimeType = data.mime_type || 'image/jpeg';
+
+            // Base64 转 Blob
+            const byteCharacters = atob(imageData);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
             }
+            const byteArray = new Uint8Array(byteNumbers);
+            const enhancedBlob = new Blob([byteArray], { type: mimeType });
 
-            const parts = candidates[0].content?.parts;
-            if (!parts) {
-                throw new Error('响应格式异常');
-            }
-
-            // 查找图片数据（API 返回 camelCase: inlineData）
-            for (const part of parts) {
-                if (part.inlineData && part.inlineData.data) {
-                    const imageData = part.inlineData.data;
-                    const mimeType = part.inlineData.mimeType || 'image/png';
-
-                    // Base64 转 Blob
-                    const byteCharacters = atob(imageData);
-                    const byteNumbers = new Array(byteCharacters.length);
-                    for (let i = 0; i < byteCharacters.length; i++) {
-                        byteNumbers[i] = byteCharacters.charCodeAt(i);
-                    }
-                    const byteArray = new Uint8Array(byteNumbers);
-                    const enhancedBlob = new Blob([byteArray], { type: mimeType });
-
-                    console.log(`[PhotoEnhancer] 增强完成: ${(enhancedBlob.size / 1024 / 1024).toFixed(2)}MB`);
-                    return enhancedBlob;
-                }
-            }
-
-            throw new Error('响应中未找到图片数据');
+            console.log(`[PhotoEnhancer] 增强完成: ${(enhancedBlob.size / 1024 / 1024).toFixed(2)}MB`);
+            return enhancedBlob;
 
         } catch (error) {
             console.error('[PhotoEnhancer] 增强失败:', error);
