@@ -480,7 +480,7 @@
         let isMultiplayer = false;
 
         // 实时同步 (Socket.IO)
-        const realtimeSync = new RealtimeSync('http://localhost:8080');
+        const realtimeSync = new RealtimeSync(window.CONFIG.REALTIME_SERVER);
         let useRealtimeSync = true; // 是否使用 Socket.IO 同步
 
         // ========== 插值缓冲器 ==========
@@ -791,7 +791,7 @@
         // API Key 已移至服务器代理，客户端不再暴露任何 Key
 
         // 照片增强器（传入你的服务器地址，同域部署可留空）
-        const photoEnhancer = new PhotoEnhancer('http://localhost:8000');
+        const photoEnhancer = new PhotoEnhancer(window.CONFIG.API_SERVER);
 
         let orbitControls;
 
@@ -1194,7 +1194,7 @@
         }
 
         // 地址搜索自动补全（使用服务器代理）
-        const API_SERVER = 'http://localhost:8000';
+        const API_SERVER = window.CONFIG.API_SERVER;
         let placesInitialized = false;
         let autocompleteTimeout = null;
 
@@ -1294,7 +1294,7 @@
         }
 
         // 初始化小地图 (Google Static Maps API via 后端代理)
-        const STATIC_MAP_API = 'http://localhost:8000/api/staticmap';
+        const STATIC_MAP_API = `${window.CONFIG.API_SERVER}/api/staticmap`;
         let minimapInitialized = false;
         let minimapCounter = 0;
         let lastMinimapLat = 0;

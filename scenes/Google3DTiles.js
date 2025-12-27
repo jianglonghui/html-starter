@@ -6,7 +6,7 @@ import { GLTFLoader } from 'https://unpkg.com/three@0.160.0/examples/jsm/loaders
 import { DRACOLoader } from 'https://unpkg.com/three@0.160.0/examples/jsm/loaders/DRACOLoader.js';
 
 // 代理服务器地址
-const TILES_PROXY_URL = 'http://localhost:8000/api/tiles';
+const TILES_PROXY_URL = `${window.CONFIG.API_SERVER}/api/tiles`;
 
 /**
  * 自定义代理插件 - 替代 GoogleCloudAuthPlugin
