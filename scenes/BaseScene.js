@@ -83,4 +83,44 @@ export class BaseScene {
     getName() {
         return 'BaseScene';
     }
+
+    /**
+     * 完全销毁场景 - 清理所有路段和资源
+     */
+    dispose() {
+        console.log(`[${this.getName()}] dispose: 清理 ${this.roadSegments.length} 个路段`);
+
+        // 清理所有路段
+        for (const seg of this.roadSegments) {
+            // 移除物理体
+            if (seg.bodies) {
+                seg.bodies.forEach(b => {
+                    if (this.world.bodies.includes(b)) {
+                        this.world.removeBody(b);
+                    }
+                });
+            }
+            // 移除 mesh 并释放资源
+            if (seg.meshes) {
+                seg.meshes.forEach(m => {
+                    this.scene.remove(m);
+                    if (m.geometry) m.geometry.dispose();
+                    if (m.material) {
+                        if (Array.isArray(m.material)) {
+                            m.material.forEach(mat => mat.dispose());
+                        } else {
+                            m.material.dispose();
+                        }
+                    }
+                });
+            }
+        }
+        this.roadSegments = [];
+
+        // 清理路面纹理
+        if (this.roadTex) {
+            this.roadTex.dispose();
+            this.roadTex = null;
+        }
+    }
 }

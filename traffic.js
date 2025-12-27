@@ -677,12 +677,14 @@ export class NPCVehicle {
  * 傀儡 NPC - 非房主使用，只有视觉没有物理模拟
  */
 export class GhostNPC {
-    constructor(id, scene) {
+    constructor(id, scene, world = null) {
         this.id = id;
         this.scene = scene;
+        this.world = world;
         this.mesh = null;
         this.visualWheels = [];
         this.vehicleType = 0;
+        this.physicsBody = null; // KINEMATIC 碰撞体
     }
 
     // 根据同步数据创建/更新视觉
@@ -695,18 +697,38 @@ export class GhostNPC {
         if (this.mesh) {
             this.mesh.position.set(state.pos.x, state.pos.y, state.pos.z);
             this.mesh.quaternion.set(state.quat.x, state.quat.y, state.quat.z, state.quat.w);
+            this.updateWheels();
+        }
+    }
 
-            // 根据车身计算轮子位置
-            const wheelOffsets = [
-                [-1.1, -0.2, -1.4], [1.1, -0.2, -1.4],
-                [-1.1, -0.2, 1.4],  [1.1, -0.2, 1.4]
-            ];
-            for (let i = 0; i < 4; i++) {
-                const offset = new THREE.Vector3(...wheelOffsets[i]).multiplyScalar(1.3);
-                offset.applyQuaternion(this.mesh.quaternion);
-                this.visualWheels[i].position.copy(this.mesh.position).add(offset);
-                this.visualWheels[i].quaternion.copy(this.mesh.quaternion);
-            }
+    // 更新轮子位置（根据车身计算）+ 同步物理体
+    updateWheels() {
+        if (!this.mesh || this.visualWheels.length === 0) return;
+
+        const wheelOffsets = [
+            [-1.1, -0.2, -1.4], [1.1, -0.2, -1.4],
+            [-1.1, -0.2, 1.4],  [1.1, -0.2, 1.4]
+        ];
+        for (let i = 0; i < 4; i++) {
+            const offset = new THREE.Vector3(...wheelOffsets[i]).multiplyScalar(1.3);
+            offset.applyQuaternion(this.mesh.quaternion);
+            this.visualWheels[i].position.copy(this.mesh.position).add(offset);
+            this.visualWheels[i].quaternion.copy(this.mesh.quaternion);
+        }
+
+        // 同步物理体位置
+        if (this.physicsBody) {
+            this.physicsBody.position.set(
+                this.mesh.position.x,
+                this.mesh.position.y,
+                this.mesh.position.z
+            );
+            this.physicsBody.quaternion.set(
+                this.mesh.quaternion.x,
+                this.mesh.quaternion.y,
+                this.mesh.quaternion.z,
+                this.mesh.quaternion.w
+            );
         }
     }
 
@@ -785,9 +807,32 @@ export class GhostNPC {
             this.scene.add(w);
             this.visualWheels.push(w);
         }
+
+        // 创建物理碰撞体（KINEMATIC，用于碰撞检测）
+        if (this.world && typeof CANNON !== 'undefined') {
+            const boxSize = vehicleType === 2
+                ? { x: 1.5, y: 1.2, z: 2.5 }  // 货车
+                : { x: 1.3, y: 0.8, z: 2.8 }; // 轿车/皮卡
+
+            const shape = new CANNON.Box(new CANNON.Vec3(boxSize.x, boxSize.y, boxSize.z));
+            this.physicsBody = new CANNON.Body({
+                mass: 0, // KINEMATIC
+                type: CANNON.Body.KINEMATIC,
+                collisionFilterGroup: 2,    // 交通车组
+                collisionFilterMask: 1 | 2  // 与主车和其他交通车碰撞
+            });
+            this.physicsBody.addShape(shape, new CANNON.Vec3(0, boxSize.y, 0));
+            this.world.addBody(this.physicsBody);
+        }
     }
 
     destroy() {
+        // 移除物理体
+        if (this.physicsBody && this.world) {
+            this.world.removeBody(this.physicsBody);
+            this.physicsBody = null;
+        }
+
         if (this.mesh) {
             this.mesh.traverse(child => {
                 if (child.isMesh) {
@@ -823,15 +868,21 @@ export class TrafficManager {
         this.isMultiplayer = false;
         this.isHost = false;
         this.ghostVehicles = new Map(); // 非房主的傀儡车辆
+
+        // 事件回调（用于同步）
+        this.onVehicleSpawn = null;   // (vehicleData) => {}
+        this.onVehicleDestroy = null; // (id) => {}
     }
 
     // 设置多人模式
     setMultiplayerMode(isMultiplayer, isHost) {
+        console.log(`[Traffic] setMultiplayerMode(${isMultiplayer}, ${isHost})`);
         this.isMultiplayer = isMultiplayer;
         this.isHost = isHost;
 
         // 非房主清除本地物理 NPC
         if (isMultiplayer && !isHost) {
+            console.log(`[Traffic] 非房主，清除 ${this.vehicles.length} 辆本地车`);
             this.vehicles.forEach(v => v.destroy());
             this.vehicles = [];
         }
@@ -865,6 +916,18 @@ export class TrafficManager {
                     npc.bodyColorHex = npc.mesh.children[0]?.material?.color?.getHex() || 0x888888;
                     this.vehicles.push(npc);
                     this.spawnTimer = 0;
+
+                    // 触发生成事件
+                    if (this.onVehicleSpawn) {
+                        this.onVehicleSpawn({
+                            id: npc.uid,
+                            vehicleType: npc.vehicleType,
+                            bodyColor: npc.bodyColorHex,
+                            plateNumber: npc.plateNumber,
+                            pos: [npc.chassisBody.position.x, npc.chassisBody.position.y, npc.chassisBody.position.z],
+                            quat: [npc.chassisBody.quaternion.x, npc.chassisBody.quaternion.y, npc.chassisBody.quaternion.z, npc.chassisBody.quaternion.w]
+                        });
+                    }
                 }
             }
         }
@@ -877,6 +940,10 @@ export class TrafficManager {
             const dist = v.chassisBody.position.z - playerZ;
             // 范围外回收
             if (dist > 150 || dist < -450 || v.chassisBody.position.y < -20) {
+                // 触发销毁事件
+                if (this.onVehicleDestroy) {
+                    this.onVehicleDestroy(v.uid);
+                }
                 v.destroy();
                 this.vehicles.splice(i, 1);
             }
@@ -885,40 +952,84 @@ export class TrafficManager {
         this.analyzeTraffic();
     }
 
-    // 房主导出 NPC 状态用于同步
+    // 房主导出 NPC 状态用于同步（只导出动态数据）
     exportNPCStates() {
         return this.vehicles.map(v => ({
+            id: v.uid,
+            pos: [v.chassisBody.position.x, v.chassisBody.position.y, v.chassisBody.position.z],
+            quat: [v.chassisBody.quaternion.x, v.chassisBody.quaternion.y, v.chassisBody.quaternion.z, v.chassisBody.quaternion.w]
+        }));
+    }
+
+    // 导出新生成车辆的完整信息（静态+动态）
+    exportNewVehicles() {
+        const newVehicles = this.vehicles.filter(v => !v.synced);
+        newVehicles.forEach(v => v.synced = true);
+        return newVehicles.map(v => ({
             id: v.uid,
             vehicleType: v.vehicleType,
             bodyColor: v.bodyColorHex,
             plateNumber: v.plateNumber,
-            pos: { x: v.chassisBody.position.x, y: v.chassisBody.position.y, z: v.chassisBody.position.z },
-            quat: { x: v.chassisBody.quaternion.x, y: v.chassisBody.quaternion.y, z: v.chassisBody.quaternion.z, w: v.chassisBody.quaternion.w }
+            pos: [v.chassisBody.position.x, v.chassisBody.position.y, v.chassisBody.position.z],
+            quat: [v.chassisBody.quaternion.x, v.chassisBody.quaternion.y, v.chassisBody.quaternion.z, v.chassisBody.quaternion.w]
         }));
     }
 
-    // 非房主接收并更新傀儡 NPC
+    // 获取已销毁的车辆ID
+    getDestroyedVehicleIds() {
+        const destroyed = this._destroyedIds || [];
+        this._destroyedIds = [];
+        return destroyed;
+    }
+
+    // 标记车辆销毁（在 destroy 前调用）
+    markVehicleDestroyed(uid) {
+        if (!this._destroyedIds) this._destroyedIds = [];
+        this._destroyedIds.push(uid);
+    }
+
+    // 非房主接收并更新傀儡 NPC 位置（高频，只更新位置）
     applyNPCStates(states) {
         if (!this.isMultiplayer || this.isHost) return;
 
-        const currentIds = new Set(states.map(s => s.id));
+        for (const state of states) {
+            const ghost = this.ghostVehicles.get(state.id);
+            if (ghost && ghost.mesh) {
+                ghost.mesh.position.set(state.pos[0], state.pos[1], state.pos[2]);
+                ghost.mesh.quaternion.set(state.quat[0], state.quat[1], state.quat[2], state.quat[3]);
+                ghost.updateWheels();
+            }
+        }
+    }
 
-        // 删除不存在的傀儡
-        for (const [id, ghost] of this.ghostVehicles) {
-            if (!currentIds.has(id)) {
+    // 非房主接收新生成的车辆（低频，完整数据）
+    applyNewVehicles(vehicles) {
+        console.log(`[applyNewVehicles] 收到 ${vehicles.length} 辆, isMultiplayer=${this.isMultiplayer}, isHost=${this.isHost}`);
+        if (!this.isMultiplayer || this.isHost) return;
+
+        for (const v of vehicles) {
+            if (!this.ghostVehicles.has(v.id)) {
+                console.log(`[applyNewVehicles] 创建车辆 ${v.id}, type=${v.vehicleType}`);
+                const ghost = new GhostNPC(v.id, this.scene, this.world);
+                ghost.createVisual(v.vehicleType, v.bodyColor, v.plateNumber);
+                ghost.mesh.position.set(v.pos[0], v.pos[1], v.pos[2]);
+                ghost.mesh.quaternion.set(v.quat[0], v.quat[1], v.quat[2], v.quat[3]);
+                ghost.updateWheels(); // 初始化物理体位置
+                this.ghostVehicles.set(v.id, ghost);
+            }
+        }
+    }
+
+    // 非房主接收销毁的车辆ID
+    applyDestroyedVehicles(ids) {
+        if (!this.isMultiplayer || this.isHost) return;
+
+        for (const id of ids) {
+            const ghost = this.ghostVehicles.get(id);
+            if (ghost) {
                 ghost.destroy();
                 this.ghostVehicles.delete(id);
             }
-        }
-
-        // 更新或创建傀儡
-        for (const state of states) {
-            let ghost = this.ghostVehicles.get(state.id);
-            if (!ghost) {
-                ghost = new GhostNPC(state.id, this.scene);
-                this.ghostVehicles.set(state.id, ghost);
-            }
-            ghost.updateFromState(state);
         }
     }
 
@@ -928,6 +1039,23 @@ export class TrafficManager {
             ghost.destroy();
         }
         this.ghostVehicles.clear();
+    }
+
+    // 完全销毁 TrafficManager
+    dispose() {
+        // 清理所有物理 NPC
+        for (const v of this.vehicles) {
+            v.destroy();
+        }
+        this.vehicles = [];
+
+        // 清理所有 Ghost NPC
+        this.clearGhosts();
+
+        // 清理路点
+        this.waypoints = [];
+
+        console.log('[Traffic] dispose 完成');
     }
 
     isAreaSafe(z, lane) {

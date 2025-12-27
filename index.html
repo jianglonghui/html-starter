@@ -473,10 +473,320 @@
         import { MountainRoad, SeaHighway, TempleIsland, SceneList } from './scenes/index.js';
         import { MultiplayerManager } from './multiplayer.js';
         import { PhotoEnhancer } from './photoEnhancer.js';
+        import { RealtimeSync } from './realtimeSync.js';
 
-        // Multiplayer Manager
+        // Multiplayer Manager (Playroom 备用)
         const multiplayer = new MultiplayerManager();
         let isMultiplayer = false;
+
+        // 实时同步 (Socket.IO)
+        const realtimeSync = new RealtimeSync('http://localhost:8080');
+        let useRealtimeSync = true; // 是否使用 Socket.IO 同步
+
+        // ========== 插值缓冲器 ==========
+        class InterpolationBuffer {
+            constructor(delay = 100) {
+                this.buffer = [];
+                this.renderDelay = delay; // 延迟播放时间 (ms)
+                this.maxBufferSize = 10;  // 最多缓存帧数
+            }
+
+            // 添加新状态
+            push(state, serverTime = null) {
+                const now = Date.now();
+                this.buffer.push({
+                    state: state,
+                    time: serverTime || now,
+                    receiveTime: now
+                });
+
+                // 限制缓冲区大小
+                while (this.buffer.length > this.maxBufferSize) {
+                    this.buffer.shift();
+                }
+            }
+
+            // 采样：获取插值后的状态
+            sample(now = Date.now()) {
+                if (this.buffer.length === 0) return null;
+                if (this.buffer.length === 1) return this.buffer[0].state;
+
+                // 目标渲染时间 = 当前时间 - 延迟
+                const renderTime = now - this.renderDelay;
+
+                // 找到 renderTime 前后的两帧
+                let before = null, after = null;
+                for (let i = 0; i < this.buffer.length; i++) {
+                    if (this.buffer[i].receiveTime <= renderTime) {
+                        before = this.buffer[i];
+                    } else {
+                        after = this.buffer[i];
+                        break;
+                    }
+                }
+
+                // 边界情况处理
+                if (!before && after) return after.state;
+                if (before && !after) return before.state;
+                if (!before && !after) return this.buffer[this.buffer.length - 1].state;
+
+                // 计算插值因子 t (0-1)
+                const totalTime = after.receiveTime - before.receiveTime;
+                const elapsed = renderTime - before.receiveTime;
+                const t = Math.max(0, Math.min(1, elapsed / totalTime));
+
+                // 线性插值
+                return this.lerp(before.state, after.state, t);
+            }
+
+            // 线性插值两个状态
+            lerp(a, b, t) {
+                return {
+                    pos: {
+                        x: a.pos.x + (b.pos.x - a.pos.x) * t,
+                        y: a.pos.y + (b.pos.y - a.pos.y) * t,
+                        z: a.pos.z + (b.pos.z - a.pos.z) * t
+                    },
+                    quat: this.slerpQuat(a.quat, b.quat, t)
+                };
+            }
+
+            // 四元数球面插值 (简化版)
+            slerpQuat(a, b, t) {
+                // 简化：线性插值后归一化
+                const result = {
+                    x: a.x + (b.x - a.x) * t,
+                    y: a.y + (b.y - a.y) * t,
+                    z: a.z + (b.z - a.z) * t,
+                    w: a.w + (b.w - a.w) * t
+                };
+                // 归一化
+                const len = Math.sqrt(result.x*result.x + result.y*result.y + result.z*result.z + result.w*result.w);
+                if (len > 0) {
+                    result.x /= len;
+                    result.y /= len;
+                    result.z /= len;
+                    result.w /= len;
+                }
+                return result;
+            }
+
+            // 清空缓冲区
+            clear() {
+                this.buffer = [];
+            }
+
+            // 获取缓冲状态
+            getStatus() {
+                return {
+                    size: this.buffer.length,
+                    delay: this.renderDelay
+                };
+            }
+        }
+
+        // 创建主车插值缓冲器
+        const carInterpolationBuffer = new InterpolationBuffer(100); // 100ms 延迟
+
+        // 收包频率统计
+        const packetStats = {
+            carState: { count: 0, lastReset: Date.now(), hz: 0 },
+            traffic: { count: 0, lastReset: Date.now(), hz: 0 }
+        };
+
+        // 每秒更新频率统计
+        setInterval(() => {
+            const now = Date.now();
+            const carElapsed = (now - packetStats.carState.lastReset) / 1000;
+            const trafficElapsed = (now - packetStats.traffic.lastReset) / 1000;
+
+            packetStats.carState.hz = (packetStats.carState.count / carElapsed).toFixed(1);
+            packetStats.traffic.hz = (packetStats.traffic.count / trafficElapsed).toFixed(1);
+
+            // 重置计数
+            packetStats.carState.count = 0;
+            packetStats.carState.lastReset = now;
+            packetStats.traffic.count = 0;
+            packetStats.traffic.lastReset = now;
+
+            // 输出到控制台
+            if (!realtimeSync.isDriver) {
+                const bufStatus = carInterpolationBuffer.getStatus();
+                console.log(`[收包频率] 主车: ${packetStats.carState.hz} Hz | 交通: ${packetStats.traffic.hz} Hz | 缓冲: ${bufStatus.size}帧/${bufStatus.delay}ms`);
+            }
+        }, 1000);
+
+        // 设置实时同步回调
+        function setupRealtimeSyncCallbacks() {
+            // 接收车辆状态更新（来自驾驶员）- 直接设置位置
+            realtimeSync.onCarStateUpdate = (data) => {
+                packetStats.carState.count++;
+                if (!chassisBody || realtimeSync.isDriver) return;
+
+                const state = data.state;
+                if (state) {
+                    // 存入插值缓冲区，不直接设置位置
+                    carInterpolationBuffer.push(state, data.timestamp);
+                }
+            };
+
+            // 驾驶员变更
+            realtimeSync.onDriverChanged = (data) => {
+                const isMe = data.driver_sid === realtimeSync.mySid;
+                updateDriverUI(data.driver_name, isMe);
+
+                // 清空插值缓冲区
+                carInterpolationBuffer.clear();
+
+                // 换驾驶员时重置车辆输入状态
+                if (vehicle) {
+                    vehicle.applyEngineForce(0, 0);
+                    vehicle.applyEngineForce(0, 1);
+                    vehicle.applyEngineForce(0, 2);
+                    vehicle.applyEngineForce(0, 3);
+                    vehicle.setSteeringValue(0, 0);
+                    vehicle.setSteeringValue(0, 1);
+                }
+
+                // 切换主车物理模式
+                if (chassisBody) {
+                    if (isMe && chassisBody._isKinematic) {
+                        // 我变成驾驶员 → DYNAMIC
+                        chassisBody.type = CANNON.Body.DYNAMIC;
+                        chassisBody._isKinematic = false;
+                        console.log('[Sync] 主车恢复 DYNAMIC 模式');
+                    } else if (!isMe && !chassisBody._isKinematic) {
+                        // 我不再是驾驶员 → KINEMATIC
+                        chassisBody.type = CANNON.Body.KINEMATIC;
+                        chassisBody._isKinematic = true;
+                        console.log('[Sync] 主车设为 KINEMATIC 模式');
+                    }
+                }
+            };
+
+            // 接收按键事件（来自驾驶员）
+            realtimeSync.onKeyEvent = (data) => {
+                if (realtimeSync.isDriver) return;
+                // 模拟按键事件
+                if (window.simulateKey) {
+                    window.simulateKey(data.key, data.is_down);
+                }
+            };
+
+            // 场景变更（房主切换场景）
+            realtimeSync.onSceneChanged = (data) => {
+                if (realtimeSync.isHost) return; // 房主自己切换的，不需要处理
+
+                console.log('[RealtimeSync] 收到场景变更:', data);
+                const sceneIndex = data.scene_index;
+                const location = data.location;
+
+                // 保存位置信息（用于 Google 3D Tiles）
+                window.syncedLocation = location;
+
+                // 清理旧场景（和房主 switchScene 逻辑一致）
+                if (currentScene) {
+                    currentScene.roadSegments.forEach(seg => {
+                        seg.bodies.forEach(b => world.removeBody(b));
+                        seg.meshes.forEach(m => {
+                            scene.remove(m);
+                            if (m.geometry) m.geometry.dispose();
+                            if (m.material) {
+                                if (Array.isArray(m.material)) {
+                                    m.material.forEach(mat => mat.dispose());
+                                } else {
+                                    m.material.dispose();
+                                }
+                            }
+                        });
+                    });
+                    // 清理水面等额外元素
+                    if (currentScene.waterMeshes) {
+                        currentScene.waterMeshes.forEach(w => {
+                            scene.remove(w);
+                            w.geometry.dispose();
+                            w.material.dispose();
+                        });
+                    }
+                    // 清理 3D Tiles 等资源
+                    if (currentScene.dispose) {
+                        currentScene.dispose();
+                    }
+                }
+
+                // 清理交通车 Ghost（不销毁 traffic manager，只清理 ghost）
+                if (traffic) {
+                    traffic.clearGhosts();
+                }
+
+                // 清空插值缓冲区
+                carInterpolationBuffer.clear();
+
+                // 初始化新场景
+                initScene(sceneIndex);
+
+                // 重置车辆位置
+                if (chassisBody) {
+                    chassisBody.position.set(0, 5, 0);
+                    chassisBody.velocity.set(0, 0, 0);
+                    chassisBody.angularVelocity.set(0, 0, 0);
+                    chassisBody.quaternion.set(0, 0, 0, 1);
+                }
+            };
+
+            // 玩家加入
+            realtimeSync.onPlayerJoined = (data) => {
+                console.log(`[RealtimeSync] 玩家 ${data.name} 加入`);
+            };
+
+            // 玩家离开
+            realtimeSync.onPlayerLeft = (data) => {
+                console.log(`[RealtimeSync] 玩家 ${data.sid} 离开`);
+            };
+
+            // 房主变更
+            realtimeSync.onHostChanged = (data) => {
+                console.log('[RealtimeSync] 房主已变更');
+                // 更新交通管理器的房主状态
+                if (traffic) {
+                    traffic.setMultiplayerMode(true, realtimeSync.isHost);
+                }
+            };
+
+            // 交通车辆位置更新（非房主接收，高频）
+            realtimeSync.onTrafficStateUpdate = (data) => {
+                packetStats.traffic.count++;
+                if (traffic && !realtimeSync.isHost && data.p) {
+                    traffic.applyNPCStates(data.p);
+                }
+            };
+
+            // 交通车辆生成（非房主接收）
+            realtimeSync.onTrafficSpawn = (data) => {
+                if (traffic && !realtimeSync.isHost && data.vehicle) {
+                    console.log(`[客户端] 生成车辆 ${data.vehicle.id}`);
+                    traffic.applyNewVehicles([data.vehicle]);
+                }
+            };
+
+            // 交通车辆销毁（非房主接收）
+            realtimeSync.onTrafficDestroy = (data) => {
+                if (traffic && !realtimeSync.isHost && data.id) {
+                    console.log(`[客户端] 销毁车辆 ${data.id}`);
+                    traffic.applyDestroyedVehicles([data.id]);
+                }
+            };
+
+            // 连接成功后，如果是房主，自动认领驾驶员
+            if (realtimeSync.isHost) {
+                realtimeSync.claimDriver();
+            }
+
+            // 设置交通管理器的多人模式
+            if (traffic) {
+                traffic.setMultiplayerMode(true, realtimeSync.isHost);
+            }
+        }
 
         // API Key 已移至服务器代理，客户端不再暴露任何 Key
 
@@ -738,6 +1048,18 @@
         window.joinRoom = async function (roomId) {
             console.log("Joining room:", roomId);
             document.getElementById('start-screen').style.display = 'none';
+
+            // 连接实时同步服务器
+            if (useRealtimeSync) {
+                try {
+                    await realtimeSync.connect(roomId, '玩家' + Math.floor(Math.random() * 1000));
+                    setupRealtimeSyncCallbacks();
+                } catch (e) {
+                    console.warn('实时同步服务器连接失败，回退到 Playroom:', e);
+                    useRealtimeSync = false;
+                }
+            }
+
             const success = await multiplayer.init(roomId);
             if (success) {
                 // 非房主：等待房主的场景信息
@@ -783,6 +1105,19 @@
         window.createRoom = async function () {
             console.log("Creating room...");
             document.getElementById('start-screen').style.display = 'none';
+
+            // 生成房间 ID 并连接实时同步服务器
+            const roomId = 'room_' + Math.random().toString(36).substr(2, 6);
+            if (useRealtimeSync) {
+                try {
+                    await realtimeSync.connect(roomId, '房主');
+                    setupRealtimeSyncCallbacks();
+                } catch (e) {
+                    console.warn('实时同步服务器连接失败，回退到 Playroom:', e);
+                    useRealtimeSync = false;
+                }
+            }
+
             const success = await multiplayer.init();
             if (success) {
                 init();
@@ -1062,9 +1397,12 @@
         // 切换场景
         function switchScene() {
             // 联机模式下只有房主能切换场景
-            if (isMultiplayer && !multiplayer.amIHost()) {
-                console.log("只有房主可以切换场景");
-                return;
+            if (isMultiplayer) {
+                const isHost = useRealtimeSync ? realtimeSync.isHost : multiplayer.amIHost();
+                if (!isHost) {
+                    console.log("只有房主可以切换场景");
+                    return;
+                }
             }
 
             // 清理旧场景
@@ -1108,8 +1446,13 @@
             initScene(currentSceneIndex);
 
             // 联机模式下同步场景给其他玩家
-            if (isMultiplayer && multiplayer.amIHost()) {
-                multiplayer.setSceneInfo(currentSceneIndex, null);
+            if (isMultiplayer) {
+                if (useRealtimeSync && realtimeSync.isHost) {
+                    realtimeSync.sendSceneChange(currentSceneIndex, null);
+                }
+                if (multiplayer.amIHost()) {
+                    multiplayer.setSceneInfo(currentSceneIndex, null);
+                }
             }
 
             // 重置交通
@@ -1737,9 +2080,22 @@
 
             // 多人模式下设置 NPC 同步
             if (isMultiplayer) {
-                traffic.setMultiplayerMode(true, multiplayer.amIHost());
+                // 优先使用 RealtimeSync 的房主状态
+                const amHost = useRealtimeSync ? realtimeSync.isHost : multiplayer.amIHost();
+                traffic.setMultiplayerMode(true, amHost);
+                console.log(`[Traffic] 多人模式初始化, 我是房主: ${amHost}`);
 
-                // 非房主：接收 NPC 状态
+                // 房主：设置生成/销毁回调
+                if (useRealtimeSync && amHost) {
+                    traffic.onVehicleSpawn = (vehicleData) => {
+                        realtimeSync.sendTrafficSpawn(vehicleData);
+                    };
+                    traffic.onVehicleDestroy = (vehicleId) => {
+                        realtimeSync.sendTrafficDestroy(vehicleId);
+                    };
+                }
+
+                // 非房主：接收 NPC 状态（Playroom 备用）
                 if (!multiplayer.amIHost()) {
                     multiplayer.onNPCStateChange = (states) => {
                         if (traffic) {
@@ -1950,12 +2306,20 @@
                 case 'a':
                 case 'd':
                 case ' ':
-                    if (isMultiplayer && !multiplayer.isDriver()) break;
+                    // 多人游戏中，非驾驶员不能控制
+                    if (isMultiplayer) {
+                        const canDrive = useRealtimeSync ? realtimeSync.isDriver : multiplayer.isDriver();
+                        if (!canDrive) break;
+                    }
                     applyDriveControl(e.key.toLowerCase(), up);
                     // 驾驶员发送按键事件
-                    if (isMultiplayer && multiplayer.isDriver()) {
-                        console.log(`[Driver] Triggering sendKeyEvent for: ${e.key.toLowerCase()} ${up ? 'DOWN' : 'UP'}`);
-                        multiplayer.sendKeyEvent(e.key.toLowerCase(), up);
+                    if (isMultiplayer) {
+                        if (useRealtimeSync && realtimeSync.isDriver) {
+                            realtimeSync.sendKeyEvent(e.key.toLowerCase(), up);
+                        } else if (multiplayer.isDriver()) {
+                            console.log(`[Driver] Triggering sendKeyEvent for: ${e.key.toLowerCase()} ${up ? 'DOWN' : 'UP'}`);
+                            multiplayer.sendKeyEvent(e.key.toLowerCase(), up);
+                        }
                     }
                     break;
                 case 'r':
@@ -1999,6 +2363,9 @@
                     break;
                 case 'f': // F 键抢夺驾驶权
                     if (up && isMultiplayer) {
+                        if (useRealtimeSync) {
+                            realtimeSync.claimDriver();
+                        }
                         multiplayer.claimDriver();
                         console.log("You are now the driver!");
                     }
@@ -2380,6 +2747,36 @@
                 // 事件同步模式：按键事件在 handler 中处理
                 // 驾驶员按键时发送事件，非驾驶员收到事件后立即应用
 
+                // 非驾驶员：主车不受物理影响，位置由网络同步
+                const isDriver = useRealtimeSync ? realtimeSync.isDriver : (multiplayer.isDriver && multiplayer.isDriver());
+
+                // 首次设置：非驾驶员的主车设为 kinematic
+                if (isMultiplayer && !isDriver && !chassisBody._isKinematic) {
+                    chassisBody.type = CANNON.Body.KINEMATIC;
+                    chassisBody._isKinematic = true;
+                    console.log('[Sync] 主车设为 kinematic 模式');
+                }
+
+                // 非驾驶员：从插值缓冲区采样并应用
+                if (isMultiplayer && !isDriver) {
+                    const interpolatedState = carInterpolationBuffer.sample();
+                    if (interpolatedState) {
+                        chassisBody.position.set(
+                            interpolatedState.pos.x,
+                            interpolatedState.pos.y,
+                            interpolatedState.pos.z
+                        );
+                        chassisBody.quaternion.set(
+                            interpolatedState.quat.x,
+                            interpolatedState.quat.y,
+                            interpolatedState.quat.z,
+                            interpolatedState.quat.w
+                        );
+                        chassisBody.velocity.set(0, 0, 0);
+                        chassisBody.angularVelocity.set(0, 0, 0);
+                    }
+                }
+
                 world.step(1 / 60);
 
                 // --- 核心修改：无限生成触发器 ---
@@ -2398,13 +2795,23 @@
                 }
 
                 // --- Multiplayer Sync ---
-                // 驾驶员广播位置状态用于初始同步和误差校正
-                if (isMultiplayer && multiplayer.isDriver()) {
-                    if (!window.stateSyncCounter) window.stateSyncCounter = 0;
-                    window.stateSyncCounter++;
-                    // 前5秒每帧广播（300帧），之后每秒一次
-                    if (window.stateSyncCounter < 300 || window.stateSyncCounter % 60 === 0) {
-                        multiplayer.sendCarStateSync(chassisBody);
+                if (isMultiplayer) {
+                    // 实时同步 (Socket.IO) - 高频率
+                    if (useRealtimeSync && realtimeSync.isDriver) {
+                        realtimeSync.sendCarState(chassisBody); // 内部有频率控制 30Hz
+                    }
+                    // 交通车辆位置同步（房主发送，高频）
+                    if (useRealtimeSync && realtimeSync.isHost && traffic) {
+                        const positions = traffic.exportNPCStates();
+                        realtimeSync.sendTrafficPositions(positions);
+                    }
+                    // Playroom 备用同步 - 低频率用于初始同步和校正
+                    if (multiplayer.isDriver()) {
+                        if (!window.stateSyncCounter) window.stateSyncCounter = 0;
+                        window.stateSyncCounter++;
+                        if (window.stateSyncCounter < 300 || window.stateSyncCounter % 60 === 0) {
+                            multiplayer.sendCarStateSync(chassisBody);
+                        }
                     }
                 }
 

@@ -312,4 +312,21 @@ export class TempleIsland extends BaseScene {
         this.prevZ = z;
         this.segmentCounter++;
     }
+
+    dispose() {
+        // 先调用父类清理路段
+        super.dispose();
+
+        // 清理水面
+        if (this.waterMeshes) {
+            this.waterMeshes.forEach(water => {
+                this.scene.remove(water);
+                if (water.geometry) water.geometry.dispose();
+                if (water.material) water.material.dispose();
+            });
+            this.waterMeshes = [];
+        }
+
+        console.log('[TempleIsland] dispose 完成');
+    }
 }
