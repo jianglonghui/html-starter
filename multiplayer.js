@@ -138,12 +138,15 @@ export class MultiplayerManager {
     // 发送位置校正（驾驶员调用）
     sendCarStateSync(chassisBody) {
         if (this.isDriver()) {
-            RPC.call("carStateSync", {
-                pos: { x: chassisBody.position.x, y: chassisBody.position.y, z: chassisBody.position.z },
-                quat: { x: chassisBody.quaternion.x, y: chassisBody.quaternion.y, z: chassisBody.quaternion.z, w: chassisBody.quaternion.w },
-                vel: { x: chassisBody.velocity.x, y: chassisBody.velocity.y, z: chassisBody.velocity.z },
-                angVel: { x: chassisBody.angularVelocity.x, y: chassisBody.angularVelocity.y, z: chassisBody.angularVelocity.z }
-            }, RPC.Mode.OTHERS);
+            // 压缩数据：使用数组代替对象，减少 Key 的开销
+            const compactState = [
+                chassisBody.position.x.toFixed(2), chassisBody.position.y.toFixed(2), chassisBody.position.z.toFixed(2),
+                chassisBody.quaternion.x.toFixed(3), chassisBody.quaternion.y.toFixed(3), chassisBody.quaternion.z.toFixed(3), chassisBody.quaternion.w.toFixed(3),
+                chassisBody.velocity.x.toFixed(1), chassisBody.velocity.y.toFixed(1), chassisBody.velocity.z.toFixed(1)
+            ];
+
+            // 只有当位置或速度有显著变化时才发送（简单频率控制已经在外部调用处处理，这里做数据压缩）
+            RPC.call("carStateSync", compactState, RPC.Mode.OTHERS);
         }
     }
 
@@ -168,29 +171,7 @@ export class MultiplayerManager {
         }
     }
 
-    syncCarState(chassisBody) {
-        if (this.isDriver()) {
-            setState("carState", {
-                pos: { x: chassisBody.position.x, y: chassisBody.position.y, z: chassisBody.position.z },
-                quat: { x: chassisBody.quaternion.x, y: chassisBody.quaternion.y, z: chassisBody.quaternion.z, w: chassisBody.quaternion.w },
-                vel: { x: chassisBody.velocity.x, y: chassisBody.velocity.y, z: chassisBody.velocity.z },
-                angVel: { x: chassisBody.angularVelocity.x, y: chassisBody.angularVelocity.y, z: chassisBody.angularVelocity.z },
-                timestamp: Date.now()
-            }, true);
-        }
-    }
-
-    // 事件同步：只同步按键按下/松开事件
-    syncKeyEvent(key, isDown) {
-        if (this.isDriver()) {
-            console.log(`[Driver] syncKeyEvent (setState): ${key} ${isDown ? 'DOWN' : 'UP'}`);
-            setState("keyEvent", {
-                key: key,
-                isDown: isDown,
-                seq: (this.keyEventSeq = (this.keyEventSeq || 0) + 1)
-            }, true);
-        }
-    }
+    // 已移除 syncCarState 和 syncKeyEvent，改用 RPC 提高性能
 
     // 按键事件回调
     onKeyEvent = null;

@@ -398,10 +398,13 @@
 
     <!-- 地址搜索框（仅在 Google 3D 场景显示） -->
     <div id="location-search" style="display: none; position: absolute; top: 10px; right: 10px; z-index: 100;">
-        <div style="background: rgba(255,255,255,0.95); border-radius: 8px; padding: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); width: 280px; position: relative;">
+        <div
+            style="background: rgba(255,255,255,0.95); border-radius: 8px; padding: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); width: 280px; position: relative;">
             <input type="text" id="address-input" placeholder="输入地址搜索..." autocomplete="off"
                 style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box;" />
-            <div id="autocomplete-dropdown" style="display: none; position: absolute; top: 100%; left: 0; right: 0; background: white; border-radius: 0 0 8px 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.2); max-height: 200px; overflow-y: auto; z-index: 1000;"></div>
+            <div id="autocomplete-dropdown"
+                style="display: none; position: absolute; top: 100%; left: 0; right: 0; background: white; border-radius: 0 0 8px 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.2); max-height: 200px; overflow-y: auto; z-index: 1000;">
+            </div>
             <div id="search-status" style="font-size: 11px; color: #666; margin-top: 4px; padding: 0 4px;"></div>
         </div>
     </div>
@@ -561,7 +564,7 @@
                     w: a.w + (b.w - a.w) * t
                 };
                 // 归一化
-                const len = Math.sqrt(result.x*result.x + result.y*result.y + result.z*result.z + result.w*result.w);
+                const len = Math.sqrt(result.x * result.x + result.y * result.y + result.z * result.z + result.w * result.w);
                 if (len > 0) {
                     result.x /= len;
                     result.y /= len;
@@ -874,20 +877,25 @@
         };
 
         // 收到位置校正时应用（每秒一次）
-        multiplayer.onCarStateSync = (state) => {
-            if (chassisBody) {
+        multiplayer.onCarStateSync = (compactState) => {
+            packetStats.carState.count++; // 增加计数以统计 Hz
+            if (chassisBody && !multiplayer.isDriver()) {
+                // 解析压缩后的数组数据
+                const [px, py, pz, qx, qy, qz, qw, vx, vy, vz] = compactState.map(Number);
+
                 // 平滑校正而不是直接覆盖
                 const posError = new THREE.Vector3(
-                    state.pos.x - chassisBody.position.x,
-                    state.pos.y - chassisBody.position.y,
-                    state.pos.z - chassisBody.position.z
+                    px - chassisBody.position.x,
+                    py - chassisBody.position.y,
+                    pz - chassisBody.position.z
                 );
+
                 // 如果误差超过0.5米，进行校正
                 if (posError.length() > 0.5) {
-                    chassisBody.position.set(state.pos.x, state.pos.y, state.pos.z);
-                    chassisBody.quaternion.set(state.quat.x, state.quat.y, state.quat.z, state.quat.w);
-                    chassisBody.velocity.set(state.vel.x, state.vel.y, state.vel.z);
-                    chassisBody.angularVelocity.set(state.angVel.x, state.angVel.y, state.angVel.z);
+                    chassisBody.position.set(px, py, pz);
+                    chassisBody.quaternion.set(qx, qy, qz, qw);
+                    chassisBody.velocity.set(vx, vy, vz);
+                    // angularVelocity 暂时不传以节省带宽
                 }
             }
         };
@@ -2805,11 +2813,12 @@
                         const positions = traffic.exportNPCStates();
                         realtimeSync.sendTrafficPositions(positions);
                     }
-                    // Playroom 备用同步 - 低频率用于初始同步和校正
+                    // Playroom 同步 - 优化后支持高频同步 (30Hz)
                     if (multiplayer.isDriver()) {
                         if (!window.stateSyncCounter) window.stateSyncCounter = 0;
                         window.stateSyncCounter++;
-                        if (window.stateSyncCounter < 300 || window.stateSyncCounter % 60 === 0) {
+                        // 每 2 帧发送一次 (约 30Hz)
+                        if (window.stateSyncCounter % 2 === 0) {
                             multiplayer.sendCarStateSync(chassisBody);
                         }
                     }

@@ -15,18 +15,28 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
-# 检查依赖
+# 创建/激活虚拟环境
+VENV_DIR="./venv"
+if [ ! -d "$VENV_DIR" ]; then
+    echo "📦 创建虚拟环境..."
+    python3 -m venv "$VENV_DIR"
+fi
+
+echo "📦 激活虚拟环境..."
+source "$VENV_DIR/bin/activate"
+
+# 安装依赖
 echo "📦 检查依赖..."
-pip3 install -r requirements.txt -q
+pip install -r requirements.txt -q
 
 # 启动 API 服务 (端口 8000)
 echo "🚀 启动 API 服务 (端口 8000)..."
-python3 -m uvicorn enhance_server:app --host 0.0.0.0 --port 8000 &
+python -m uvicorn enhance_server:app --host 0.0.0.0 --port 8000 &
 API_PID=$!
 
 # 启动实时同步服务 (端口 8080)
 echo "🚀 启动实时同步服务 (端口 8080)..."
-python3 realtime_server.py &
+python realtime_server.py &
 REALTIME_PID=$!
 
 echo ""
